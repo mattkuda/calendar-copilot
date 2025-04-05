@@ -1,0 +1,83 @@
+PRD
+Title: Calendar Copilot (MCP-integrated AI calendar assistant)
+
+Overview:
+A full-stack app that allows users to connect their Google Calendar, then query or modify their calendar using natural language through an LLM (OpenAI) via Claude for Desktop using MCP.
+
+Goals:
+
+Let users ask natural language questions like:
+
+"How many meetings do I have next week?"
+
+"What's on my calendar tomorrow?"
+
+Let users create calendar events:
+
+"Schedule a 30-minute meeting with Joe next Tuesday at 1pm CST."
+
+Features:
+
+Authentication & Calendar Linking (Frontend/Backend):
+
+OAuth2 flow to connect Google Calendar
+
+Store OAuth tokens securely (likely in backend memory for MVP)
+
+MCP Server (Node CLI):
+
+Exposes two tools:
+
+get-events-range({ startDate, endDate })
+
+create-event({ title, datetime, duration, attendees })
+
+Calls Google Calendar API to fulfill requests
+
+Claude for Desktop Integration:
+
+Configured to spawn the MCP server from local machine
+
+Accessible tools inside Claude's UI
+
+Frontend UI (Next.js + shadcn):
+
+Landing page with:
+
+Calendar connect button
+
+Simple dashboard showing upcoming events (for testing)
+
+Instructions to use Claude and test prompts
+
+Non-Goals (for MVP):
+
+No multi-user auth
+
+No persistent storage
+
+No calendar event editing or deleting
+
+Tech Stack:
+
+Frontend: Next.js (App Router), TypeScript, TailwindCSS, shadcn/ui
+
+Backend: Next.js API routes (for Google API proxy)
+
+MCP server: Node.js CLI w/ TypeScript and MCP SDK
+
+Auth: Google OAuth2
+
+LLM: OpenAI (natural language understanding)
+
+Suggested structure 
+/calendar-copilot
+├── apps/
+│   ├── web/           → Next.js + shadcn UI app
+│   └── mcp-server/    → Node CLI MCP server
+├── packages/
+│   └── shared/        → Google Calendar SDK logic, Zod schemas, utils
+├── .gitignore
+├── package.json       → root scripts, dev tools
+├── tsconfig.json      → base config
+└── turbo.json         → (optional) if using Turborepo 
