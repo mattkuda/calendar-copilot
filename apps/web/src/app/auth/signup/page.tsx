@@ -22,7 +22,13 @@ export default function SignUpPage() {
                 </div>
 
                 <div className="bg-card border rounded-lg p-6 shadow-sm">
-                    <SignUp />
+                    <SignUp
+                        path="/auth/signup"
+                        routing="path"
+                        signInUrl="/auth/signin"
+                        afterSignUpUrl="/dashboard"
+                        redirectUrl="/dashboard"
+                    />
                 </div>
             </div>
         </div>

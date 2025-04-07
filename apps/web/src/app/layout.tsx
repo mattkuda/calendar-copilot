@@ -17,7 +17,19 @@ export default function RootLayout({
     children: React.ReactNode
 }) {
     return (
-        <ClerkProvider>
+        <ClerkProvider
+            appearance={{
+                layout: {
+                    socialButtonsVariant: "iconButton"
+                },
+                elements: {
+                    formButtonPrimary:
+                        "bg-primary text-primary-foreground hover:bg-primary/90 rounded-md",
+                    card: "bg-card shadow-sm border rounded-lg",
+                    socialButtonsIconButton: "border border-input bg-background hover:bg-accent hover:text-accent-foreground rounded-md"
+                }
+            }}
+        >
             <html lang="en" suppressHydrationWarning>
                 <body className={inter.className}>
                     <ThemeProvider

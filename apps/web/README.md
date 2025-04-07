@@ -15,16 +15,46 @@ The frontend web application for Calendar Copilot, built with Next.js, Clerk for
    CLERK_SECRET_KEY=your_secret_key
    ```
 
-### 2. Google OAuth Setup
+### 2. Route Protection
+
+The application uses Clerk middleware to protect routes:
+- Public routes: Homepage, sign-in, and sign-up pages
+- Protected routes: Dashboard and any other authenticated pages
+- API routes: Protected based on authentication state
+
+The middleware automatically:
+- Redirects authenticated users from public pages to the dashboard
+- Redirects unauthenticated users from protected pages to the sign-in page
+- Allows API requests to proceed, with individual API routes handling their own authorization
+
+### 3. Google Calendar Integration
+
+The app supports two modes for calendar integration:
+
+#### Development Mode 
+When Google OAuth is not configured, the app operates with mock data:
+- Authentication works through Clerk's standard session tokens
+- Calendar events are simulated with mock data
+- Event creation is demonstrated with fake responses
+
+#### Production Mode
+For integration with real Google Calendar:
 
 1. In your Clerk dashboard, go to "Social Connections"
-2. Enable Google OAuth
-3. Create a new project in the [Google Cloud Console](https://console.cloud.google.com/) if you don't have one
-4. Enable the Google Calendar API for your project
-5. Configure your OAuth consent screen
-6. Create OAuth credentials (Web application type)
-7. Add the Clerk callback URL as an authorized redirect URI
-8. Copy your Google Client ID and Client Secret to your Clerk dashboard
+2. Enable Google OAuth integration
+3. Add required scopes:
+   - `https://www.googleapis.com/auth/calendar`
+   - `https://www.googleapis.com/auth/calendar.events`
+4. Configure OAuth settings in Google Cloud Console:
+   - Create a project with Calendar API access
+   - Configure OAuth 2.0 consent screen
+   - Create credentials and add Clerk's callback URL
+5. The app automatically detects when a user has authorized with Google and will:
+   - Attempt to use the Google OAuth token for API calls
+   - Pass this token to backend API endpoints
+   - Make real calls to the Google Calendar API
+
+The app has built-in fallback mechanisms that will gracefully degrade to mock data if OAuth is not properly configured or if token access fails.
 
 ## Running the Application
 

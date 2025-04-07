@@ -2,8 +2,28 @@
 import Link from "next/link"
 import { ChevronLeft } from "lucide-react"
 import { SignIn } from "@clerk/nextjs"
+import { useSearchParams } from "next/navigation"
+import { useEffect, useState } from "react"
 
 export default function SignInPage() {
+    const searchParams = useSearchParams();
+    const [error, setError] = useState<string | null>(null);
+
+    useEffect(() => {
+        // Check for error parameter in the URL
+        const errorParam = searchParams.get('error');
+        if (errorParam) {
+            switch (errorParam) {
+                case 'oauth_verification_failed':
+                    setError('Authentication verification failed. Please try again.');
+                    break;
+                default:
+                    setError('An error occurred during sign in. Please try again.');
+                    break;
+            }
+        }
+    }, [searchParams]);
+
     return (
         <div className="flex flex-col items-center justify-center min-h-screen p-4">
             <div className="w-full max-w-md space-y-8">
@@ -20,6 +40,12 @@ export default function SignInPage() {
                         Connect your Google Calendar to enable AI-powered calendar management.
                     </p>
                 </div>
+
+                {error && (
+                    <div className="p-3 bg-red-100 border border-red-300 text-red-800 rounded-md text-sm">
+                        {error}
+                    </div>
+                )}
 
                 <div className="bg-card border rounded-lg p-6 shadow-sm">
                     <div className="space-y-4">
@@ -44,7 +70,13 @@ export default function SignInPage() {
                         </div>
 
                         <div className="pt-4">
-                            <SignIn />
+                            <SignIn
+                                path="/auth/signin"
+                                routing="path"
+                                signUpUrl="/auth/signup"
+                                afterSignInUrl="/dashboard"
+                                redirectUrl="/dashboard"
+                            />
                         </div>
 
                         <div className="text-xs text-center text-muted-foreground mt-4">

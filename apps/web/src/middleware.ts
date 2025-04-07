@@ -1,36 +1,64 @@
-import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server';
-import type { NextRequest } from 'next/server';
-import { NextResponse } from 'next/server';
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
+import type { NextRequest } from "next/server";
 
 // Define public routes that everyone (signed-in or not) can access
 const publicRoutes = [
     "/",
-    "/auth/signin",
-    "/auth/signup",
+    "/auth/signin(.*)",
+    "/auth/signup(.*)",
+    "/auth/signin/sso-callback(.*)", // Explicitly include SSO callback URLs
     "/api/webhooks/clerk"
 ];
 
+// Clerk-specific callback patterns
+const authCallbackPatterns = [
+    /^\/auth\/signin\/sso-callback(.*)/,
+    /^\/clerk(.*)/,
+    /^\/verify(.*)/
+];
+
 const isPublicRoute = createRouteMatcher(publicRoutes);
+const isApiRoute = createRouteMatcher(["/api(.*)"]);
+const shouldRedirectToDashboard = createRouteMatcher(["/auth/signin(.*)", "/auth/signup(.*)"]);
+const shouldRedirectToSignIn = createRouteMatcher(["/dashboard(.*)"]);
 
 export default clerkMiddleware(async (auth, request) => {
-    const req = request as NextRequest;
-    const path = req.nextUrl.pathname;
-
-    // Get the authenticated state
     const { userId } = await auth();
+    const req = request as NextRequest;
+    const { pathname } = req.nextUrl;
 
-    // Allow public routes and API routes
-    if (isPublicRoute(req) || path.startsWith('/api/')) {
-        // If authenticated and accessing sign-in/sign-up, redirect to dashboard
-        if (userId && (path === '/auth/signin' || path === '/auth/signup' || path === '/')) {
-            return NextResponse.redirect(new URL('/dashboard', req.url));
+    // Check for auth callback URLs and allow them to proceed
+    // This is critical for OAuth and other authentication flows
+    for (const pattern of authCallbackPatterns) {
+        if (pattern.test(pathname)) {
+            return NextResponse.next();
         }
+    }
+
+    // ✅ Allow API requests to pass through
+    if (isApiRoute(req)) {
         return NextResponse.next();
     }
 
-    // If not signed in and trying to access protected route, redirect to sign in
-    if (!userId && path.startsWith('/dashboard')) {
-        return NextResponse.redirect(new URL('/auth/signin', req.url));
+    // ✅ Handle public routes
+    if (isPublicRoute(req)) {
+        // If authenticated and accessing sign-in/sign-up, redirect to dashboard
+        if (userId && shouldRedirectToDashboard(req)) {
+            return NextResponse.redirect(new URL("/dashboard", req.url));
+        }
+
+        // If authenticated and visiting the homepage, redirect to dashboard
+        if (userId && pathname === "/") {
+            return NextResponse.redirect(new URL("/dashboard", req.url));
+        }
+
+        return NextResponse.next();
+    }
+
+    // ✅ Handle protected routes
+    if (!userId && shouldRedirectToSignIn(req)) {
+        return NextResponse.redirect(new URL("/auth/signin", req.url));
     }
 
     return NextResponse.next();
@@ -38,8 +66,8 @@ export default clerkMiddleware(async (auth, request) => {
 
 export const config = {
     matcher: [
-        // Match all routes except static files and Next.js internals
-        "/((?!_next|[^?]*\\.(html?|css|js|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-        "/(api|trpc)(.*)", // Include API routes
+        // Match all routes except static files, Next.js internals, and Clerk auth paths
+        "/((?!_next|static|favicon.ico|.*\\.(?:jpg|jpeg|png|gif|svg|ico)).*)",
+        "/(api)(.*)", // Include API routes
     ],
 }; 
