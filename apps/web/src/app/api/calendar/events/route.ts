@@ -138,7 +138,6 @@ export async function GET(request: Request) {
             }
         ];
 
-        // Return mock events as a fallback with explanation
         return NextResponse.json({
             events: mockEvents,
             mockData: true,
