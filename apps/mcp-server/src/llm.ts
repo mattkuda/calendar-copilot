@@ -24,8 +24,8 @@ const openai = new OpenAI({
 const GetCalendarEventsSchema = z.object({
     intent: z.literal('get_events'),
     timeRange: z.object({
-        startDate: z.string().describe("Start date in ISO format or natural language (today, tomorrow, etc.)"),
-        endDate: z.string().describe("End date in ISO format or natural language")
+        startDate: z.string().describe("Start date in ISO format (YYYY-MM-DD) or natural language (today, tomorrow, etc.). Must be a full date."),
+        endDate: z.string().describe("End date in ISO format (YYYY-MM-DD) or natural language. Must be a full date.")
     }),
     description: z.string().describe("A description of what the user is asking for")
 });
@@ -34,9 +34,9 @@ const CreateCalendarEventSchema = z.object({
     intent: z.literal('create_event'),
     eventDetails: z.object({
         title: z.string().describe("The title of the event"),
-        datetime: z.string().describe("When the event should start in ISO format or natural language"),
+        datetime: z.string().describe("The full start date and time of the event in ISO format (YYYY-MM-DDTHH:MM:SS). If the user only specifies a time, assume the date is today."),
         duration: z.number().describe("Duration of the event in minutes"),
-        attendees: z.array(z.string()).optional().describe("Email addresses of attendees")
+        attendees: z.array(z.string()).nullable().describe("Email addresses of attendees")
     }),
     description: z.string().describe("A description of the event the user wants to create")
 });
@@ -65,39 +65,103 @@ export async function processCalendarPrompt(prompt: string) {
     try {
         console.log("Processing prompt with OpenAI:", prompt);
 
+        // Define the response schema directly with Zod
+        const ResponseSchema = z.object({
+            intent: z.enum(['get_events', 'create_event', 'unknown']).describe("The type of calendar action the user wants to perform"),
+            timeRange: z.object({
+                startDate: z.string().describe("Start date in ISO format (YYYY-MM-DD). If user says 'today', use today's date."),
+                endDate: z.string().describe("End date in ISO format (YYYY-MM-DD). If user says 'tomorrow', use tomorrow's date.")
+            }).describe("Time range for calendar query, required if intent is get_events."),
+            eventDetails: z.object({
+                title: z.string().describe("The title of the event"),
+                datetime: z.string().describe("The full start date and time in ISO format (YYYY-MM-DDTHH:MM:SS). **Crucially, if the user provides only a time (e.g., '8pm'), assume the date is *today* and return the full ISO datetime string.**"),
+                duration: z.number().describe("Duration in minutes (e.g., '1 hour' becomes 60)"),
+                attendees: z.array(z.string()).nullable().describe("Email addresses of attendees, if mentioned")
+            }).describe("Details for event creation, required if intent is create_event."),
+            description: z.string().describe("Description of what the user is asking for")
+        });
+
+        var currentDate = new Date();
+        var currentDateString = currentDate.toISOString();
+
         const response = await openai.beta.chat.completions.parse({
             model: "gpt-4o",
             messages: [
                 {
                     role: "system",
                     content: `You are a calendar assistant that helps users query and manage their calendar events.
-Your task is to understand what the user is asking for and extract structured information.
+Your task is to understand what the user is asking for and extract structured information based on the provided JSON schema.
 
+Today's date is ${currentDateString}.
 When the user asks about their calendar or schedule, determine if they want to:
-1. View existing events (get_events)
-2. Create a new event (create_event)
+1. View existing events ('get_events'): Extract the date range (startDate, endDate). Use ISO format YYYY-MM-DD. Default to today if only one day is mentioned (e.g., "what's on my calendar today?").
+2. Create a new event ('create_event'): Extract the title, full datetime, duration (in minutes), and attendees.
+   - **IMPORTANT**: For the 'datetime' field, ALWAYS return a full ISO datetime string (YYYY-MM-DDTHH:MM:SS). If the user only specifies a time (e.g., "at 3pm", "8-9pm"), you MUST assume the date is **today** and construct the full ISO string accordingly. Do not return just the time component.
+   - Convert durations like "1 hour" or "30 minutes" into total minutes.
 
-Extract the relevant details like dates, times, event titles, durations, and attendees.
-For dates and times, prefer ISO format where possible, but can use natural language (today, tomorrow, etc.).
-For durations, convert to minutes (e.g., 1 hour = 60 minutes).
-If the intent is unclear, return 'unknown' as the intent.`
+If the user's request is unclear or doesn't fit these intents, use 'unknown'. Provide a helpful description in all cases.`
                 },
                 {
                     role: "user",
                     content: prompt
                 }
             ],
-            response_format: zodResponseFormat(CalendarIntentSchema, "calendar_intent"),
+            response_format: zodResponseFormat(ResponseSchema, "calendarIntent"),
             temperature: 0.1
         });
 
-        // Extract the parsed content
-        const result = response.choices[0].message.parsed;
-        console.log("OpenAI processed intent:", JSON.stringify(result, null, 2));
+        console.log("OpenAI processed response:", JSON.stringify(response.choices[0].message.parsed, null, 2));
+
+        // Create a properly structured result based on the intent
+        let result: CalendarIntent;
+        const parsedResponse = response.choices[0].message.parsed;
+
+        // Default fallback for unknown intent
+        if (!parsedResponse) {
+            result = {
+                intent: 'unknown',
+                description: 'Failed to parse response from AI'
+            };
+        } else if (parsedResponse.intent === 'get_events' && parsedResponse.timeRange) {
+            result = {
+                intent: 'get_events',
+                timeRange: {
+                    startDate: parsedResponse.timeRange.startDate,
+                    endDate: parsedResponse.timeRange.endDate
+                },
+                description: parsedResponse.description
+            };
+        } else if (parsedResponse.intent === 'create_event' && parsedResponse.eventDetails) {
+            // Ensure datetime is correctly formatted (basic check)
+            if (!parsedResponse.eventDetails.datetime || !parsedResponse.eventDetails.datetime.includes('T')) {
+                console.warn("OpenAI response for datetime might be incorrect:", parsedResponse.eventDetails.datetime);
+                // Potentially throw error or attempt correction here if needed
+            }
+            result = {
+                intent: 'create_event',
+                eventDetails: {
+                    title: parsedResponse.eventDetails.title,
+                    datetime: parsedResponse.eventDetails.datetime, // Trusting OpenAI provides full ISO now
+                    duration: parsedResponse.eventDetails.duration,
+                    attendees: parsedResponse.eventDetails.attendees || []
+                },
+                description: parsedResponse.description
+            };
+        } else {
+            result = {
+                intent: 'unknown',
+                description: parsedResponse.description || 'Unknown request'
+            };
+        }
 
         return result;
     } catch (error) {
         console.error("Error processing calendar prompt with OpenAI:", error);
+        // Check if it's an OpenAI specific error
+        if (error instanceof OpenAI.APIError) {
+            console.error("OpenAI API Error Details:", { status: error.status, message: error.message, code: error.code, type: error.type });
+            throw new Error(`OpenAI API Error (${error.status}): ${error.message}`);
+        }
         throw new Error("Failed to process calendar intent");
     }
 }
@@ -135,7 +199,7 @@ Please provide a natural, conversational response summarizing these events. If t
             max_tokens: 350
         });
 
-        return response.choices[0].message.content;
+        return response.choices[0].message.content || "I've checked your calendar.";
     } catch (error) {
         console.error("Error generating calendar response:", error);
         // Fallback to simple response if OpenAI fails
@@ -153,6 +217,31 @@ Please provide a natural, conversational response summarizing these events. If t
  */
 export async function generateEventCreationResponse(eventDetails: any, prompt: string) {
     try {
+        // Safely format dates, handle potential errors
+        let startTimeStr = "N/A";
+        let endTimeStr = "N/A";
+        try {
+            startTimeStr = new Date(eventDetails.start.dateTime).toLocaleString();
+        } catch (e) { console.error("Error formatting start time:", e); }
+        try {
+            endTimeStr = new Date(eventDetails.end.dateTime).toLocaleString();
+        } catch (e) { console.error("Error formatting end time:", e); }
+
+        let attendeesStr = "";
+        if (eventDetails.attendees && eventDetails.attendees.length > 0) {
+            attendeesStr = `Attendees: ${eventDetails.attendees.map((a: any) => a.email).join(', ')}`;
+        }
+
+        const userContent = `User requested: "${prompt}"
+
+Created event details:
+Summary: ${eventDetails.summary || 'N/A'}
+Starts: ${startTimeStr}
+Ends: ${endTimeStr}
+${attendeesStr}
+
+Please provide a natural, conversational response confirming the event creation based *only* on the details provided above. Mention the title, date, and time.`;
+
         const response = await openai.chat.completions.create({
             model: "gpt-4o",
             messages: [
@@ -162,22 +251,25 @@ export async function generateEventCreationResponse(eventDetails: any, prompt: s
                 },
                 {
                     role: "user",
-                    content: `User requested: "${prompt}"
-                    
-Created event details:
-${JSON.stringify(eventDetails, null, 2)}
-
-Please provide a natural, conversational response confirming the event creation with key details like the event title, time, date, duration, and any attendees in a readable format.`
+                    content: userContent
                 }
             ],
             temperature: 0.7,
             max_tokens: 200
         });
 
-        return response.choices[0].message.content;
+        return response.choices[0].message.content || "Your event has been created.";
     } catch (error) {
         console.error("Error generating event creation response:", error);
+        if (error instanceof OpenAI.APIError) {
+            console.error("OpenAI API Error Details:", { status: error.status, message: error.message, code: error.code, type: error.type });
+        }
         // Fallback to simple response if OpenAI fails
-        return `I've created a new event "${eventDetails.summary}" for ${new Date(eventDetails.start.dateTime).toLocaleString()}.`;
+        let fallbackResponse = `I've created a new event "${eventDetails.summary || 'event'}"`;
+        try {
+            fallbackResponse += ` for ${new Date(eventDetails.start.dateTime).toLocaleString()}`;
+        } catch { /* Ignore if date parsing fails here */ }
+        fallbackResponse += ".";
+        return fallbackResponse;
     }
 } 

@@ -7,7 +7,7 @@ import path from 'path';
 import { processCalendarPrompt, generateCalendarQueryResponse, generateEventCreationResponse } from './llm';
 import { CalendarIntent } from './llm'; // Import the intent type
 
-// Load environment variables from root and local .env files
+// This is now working
 dotenv.config();
 
 // Simple API server for calendar operations
@@ -227,7 +227,7 @@ const getEventsHandler: RequestHandler = (req, res) => {
 const createEventHandler: RequestHandler = (req, res) => {
     (async () => {
         try {
-            const { title, datetime, duration, attendees = [], calendarId = 'primary' } = req.body;
+            const { title, datetime, duration, calendarId = 'primary' } = req.body;
 
             if (!title || !datetime || !duration) {
                 res.status(400).json({
@@ -272,9 +272,6 @@ const createEventHandler: RequestHandler = (req, res) => {
             // Calculate end time
             const endTime = addMinutes(startTime, duration);
 
-            // Format attendees
-            const formattedAttendees = attendees.map((email: string) => ({ email }));
-
             // Create event
             const event = {
                 summary: title,
@@ -284,7 +281,6 @@ const createEventHandler: RequestHandler = (req, res) => {
                 end: {
                     dateTime: endTime.toISOString(),
                 },
-                attendees: formattedAttendees,
             };
 
             console.log(`Creating event "${title}" in calendar: ${calendarId}`);
@@ -292,7 +288,6 @@ const createEventHandler: RequestHandler = (req, res) => {
             const response = await calendar.events.insert({
                 calendarId: calendarId as string,
                 requestBody: event,
-                sendUpdates: 'all', // Send emails to attendees
             });
 
             console.log(`Event created successfully: ${response.data.htmlLink}`);
@@ -503,7 +498,7 @@ const queryHandler: RequestHandler = (req, res) => {
                 }
             }
             else if (intent.intent === 'create_event') {
-                const { title, datetime: datetimeStr, duration, attendees = [] } = intent.eventDetails;
+                const { title, datetime: datetimeStr, duration } = intent.eventDetails;
 
                 try {
                     // Try to use service account auth first, fall back to OAuth client
@@ -526,6 +521,7 @@ const queryHandler: RequestHandler = (req, res) => {
 
                     const calendar = google.calendar({ version: 'v3', auth });
 
+                    console.log(`Datetime string: ${datetimeStr}`);
                     // Parse start time
                     let startTime;
                     try {
@@ -541,9 +537,6 @@ const queryHandler: RequestHandler = (req, res) => {
                     // Calculate end time
                     const endTime = addMinutes(startTime, duration);
 
-                    // Format attendees
-                    const formattedAttendees = attendees.map((email: string) => ({ email }));
-
                     // Create event
                     const event = {
                         summary: title,
@@ -553,7 +546,6 @@ const queryHandler: RequestHandler = (req, res) => {
                         end: {
                             dateTime: endTime.toISOString(),
                         },
-                        attendees: formattedAttendees,
                     };
 
                     console.log(`Creating event "${title}" in calendar: ${calendarId}`);
@@ -562,6 +554,12 @@ const queryHandler: RequestHandler = (req, res) => {
                         calendarId,
                         requestBody: event,
                     });
+
+                    console.log(`Response from Google Calendar create event: ${JSON.stringify(response.data)}`);
+
+                    if (!response.data) {
+                        throw new Error("Failed to create event");
+                    }
 
                     // Generate a human-friendly response with OpenAI
                     const humanResponse = await generateEventCreationResponse(
@@ -579,7 +577,6 @@ const queryHandler: RequestHandler = (req, res) => {
                             start: response.data.start,
                             end: response.data.end,
                             location: response.data.location,
-                            attendees: response.data.attendees,
                             htmlLink: response.data.htmlLink
                         }
                     });
@@ -592,7 +589,6 @@ const queryHandler: RequestHandler = (req, res) => {
                         summary: title,
                         start: { dateTime: parseDate(datetimeStr).toISOString() },
                         end: { dateTime: addMinutes(parseDate(datetimeStr), duration).toISOString() },
-                        attendees: attendees.map((email: string) => ({ email }))
                     };
 
                     // Generate a message for mock data
