@@ -40,7 +40,7 @@ export default function DashboardPage() {
     const { getToken } = useAuth();
     const [events, setEvents] = useState<CalendarEvent[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-    const [prompt, setPrompt] = useState("");
+    const [prompt, setPrompt] = useState("What meetings do I have on my calendar?");
     const [mcpResponse, setMcpResponse] = useState("");
     const [isSending, setIsSending] = useState(false);
     const [calendarError, setCalendarError] = useState<string | null>(null);
@@ -80,55 +80,49 @@ export default function DashboardPage() {
     // Handle sending prompt to MCP
     const handleSendPrompt = async () => {
         if (!prompt.trim()) return;
+        console.log("Sending prompt to MCP:", prompt);
 
         try {
             setIsSending(true);
             setMcpResponse("Processing your request...");
 
-            // Simplified: Check for event creation pattern
-            if (prompt.toLowerCase().includes("schedule") || prompt.toLowerCase().includes("create event")) {
-                // Extract event details (simplified example)
-                const title = prompt.includes("titled")
-                    ? prompt.split("titled")[1].trim().split(" ")[0]
-                    : "New Event";
+            // Get authentication tokens/headers
+            const headers = await getOAuthTokens();
 
-                const duration = prompt.includes("for") && prompt.includes("minutes")
-                    ? parseInt(prompt.split("for ")[1].split(" minutes")[0])
-                    : 30;
+            // Send the prompt to our API query endpoint, which will forward to MCP server
+            const response = await fetch("/api/query", {
+                method: "POST",
+                headers: {
+                    ...headers,
+                    "Content-Type": "application/json"
+                },
+                body: JSON.stringify({
+                    prompt,
+                    calendarId: savedCalendarId
+                })
+            });
 
-                // Use current datetime for simplicity
-                const datetime = new Date();
-                datetime.setHours(datetime.getHours() + 1); // 1 hour from now
-
-                // Create the event via our API
-                const headers = await getOAuthTokens();
-
-                const createResponse = await fetch("/api/calendar/create", {
-                    method: "POST",
-                    headers,
-                    body: JSON.stringify({
-                        title,
-                        datetime: datetime.toISOString(),
-                        duration,
-                        attendees: [],
-                        calendarId: savedCalendarId
-                    })
-                });
-
-                const eventData = await createResponse.json();
-
-                if (eventData.event) {
-                    // Refresh the event list
-                    fetchCalendarEvents();
-
-                    setMcpResponse(`Event "${title}" created successfully${eventData.mockData ? " (mock)" : ""}. It has been added to your calendar.`);
-                } else {
-                    setMcpResponse(`Failed to create event: ${eventData.error}`);
-                }
-            } else {
-                // Handle query prompt (simplified)
-                setMcpResponse(`I processed your request: "${prompt}"\n\nThis is a simulated response.`);
+            if (!response.ok) {
+                throw new Error(`API responded with status: ${response.status}`);
             }
+
+            const data = await response.json();
+
+            // Handle the MCP server response
+            if (data.response) {
+                setMcpResponse(data.response);
+            } else if (data.error) {
+                setMcpResponse(`Error: ${data.error}`);
+            } else {
+                setMcpResponse("Received response from MCP server, but no message was found.");
+            }
+
+            // If the response indicates an event was created or calendar was queried,
+            // refresh the events list
+            if (data.eventCreated || data.calendarQueried) {
+                fetchCalendarEvents();
+            }
+
         } catch (error) {
             console.error("Error sending prompt:", error);
             setMcpResponse("Sorry, there was an error processing your request.");
@@ -394,17 +388,33 @@ export default function DashboardPage() {
                         <div className="p-4 border-b">
                             <h2 className="text-xl font-semibold">Calendar Copilot</h2>
                             <p className="text-sm text-muted-foreground">
-                                Ask questions or create events using natural language
+                                Ask questions about your calendar or create events using natural language
                             </p>
                         </div>
 
                         {/* Response Display */}
-                        <div className="p-4 min-h-[100px] bg-muted/30">
-                            {mcpResponse ? (
-                                <div className="whitespace-pre-wrap">{mcpResponse}</div>
+                        <div className="p-6 min-h-[150px] bg-muted/30 relative">
+                            {isSending ? (
+                                <div className="flex flex-col items-center justify-center h-full">
+                                    <div className="animate-pulse w-6 h-6 rounded-full bg-primary/20 mb-2"></div>
+                                    <p className="text-sm text-muted-foreground">Processing your request...</p>
+                                </div>
+                            ) : mcpResponse ? (
+                                <div className="whitespace-pre-wrap text-sm">
+                                    <p className="text-xs text-muted-foreground mb-2">Calendar Copilot's response:</p>
+                                    <div className="p-3 bg-card rounded-md shadow-sm border">
+                                        {mcpResponse}
+                                    </div>
+                                </div>
                             ) : (
-                                <div className="text-muted-foreground text-sm">
-                                    Ask me about your calendar or to create events
+                                <div className="flex flex-col items-center justify-center h-full text-center">
+                                    <CalendarRange className="h-8 w-8 text-muted-foreground mb-2 opacity-50" />
+                                    <p className="text-muted-foreground text-sm">
+                                        Ask me about your calendar or to create events using natural language
+                                    </p>
+                                    <p className="text-xs text-muted-foreground mt-2">
+                                        Try: "What meetings do I have tomorrow?" or "Schedule a meeting with Joe"
+                                    </p>
                                 </div>
                             )}
                         </div>
@@ -417,7 +427,7 @@ export default function DashboardPage() {
                                 onChange={(e) => setPrompt(e.target.value)}
                                 placeholder="e.g., What meetings do I have tomorrow?"
                                 className="flex-1 min-w-0 px-3 py-2 text-sm rounded-md border border-input bg-background"
-                                onKeyDown={(e) => e.key === 'Enter' && handleSendPrompt()}
+                                onKeyDown={(e) => e.key === 'Enter' && !isSending && savedCalendarId && prompt.trim() && handleSendPrompt()}
                                 disabled={isSending || !savedCalendarId}
                             />
                             <button
@@ -425,8 +435,14 @@ export default function DashboardPage() {
                                 className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
                                 disabled={isSending || !prompt.trim() || !savedCalendarId}
                             >
-                                <Send className="h-4 w-4 mr-1" />
-                                Send
+                                {isSending ? (
+                                    <div className="animate-spin h-4 w-4 border-2 border-white/50 border-t-white rounded-full" />
+                                ) : (
+                                    <>
+                                        <Send className="h-4 w-4 mr-1" />
+                                        Send
+                                    </>
+                                )}
                             </button>
                         </div>
 
@@ -457,17 +473,21 @@ export default function DashboardPage() {
                                 Try asking Calendar Copilot:
                             </p>
                             <ul className="text-sm space-y-2">
-                                <li onClick={() => setPrompt("What meetings do I have next week?")}
+                                <li onClick={() => setPrompt("What meetings do I have this week?")}
                                     className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
-                                    "What meetings do I have next week?"
+                                    "What meetings do I have this week?"
                                 </li>
-                                <li onClick={() => setPrompt("Schedule a 30-minute meeting with Joe on Thursday at 2pm")}
+                                <li onClick={() => setPrompt("Do I have any meetings tomorrow?")}
                                     className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
-                                    "Schedule a 30-minute meeting with Joe on Thursday at 2pm"
+                                    "Do I have any meetings tomorrow?"
                                 </li>
-                                <li onClick={() => setPrompt("What's on my calendar for tomorrow?")}
+                                <li onClick={() => setPrompt("Schedule a team meeting titled Weekly Sync for next Monday at 10am for 1 hour")}
                                     className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
-                                    "What's on my calendar for tomorrow?"
+                                    "Schedule a team meeting titled Weekly Sync for next Monday at 10am for 1 hour"
+                                </li>
+                                <li onClick={() => setPrompt("Create a 30-minute call with Sarah tomorrow afternoon")}
+                                    className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
+                                    "Create a 30-minute call with Sarah tomorrow afternoon"
                                 </li>
                             </ul>
                         </div>

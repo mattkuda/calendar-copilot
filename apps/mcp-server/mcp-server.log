@@ -1,0 +1,12 @@
+
+> mcp-server@0.1.0 dev
+> ts-node src/index.ts
+
+Calendar Copilot API server running on port 3100
+Service Account configured: true
+OAuth credentials configured: true
+Test endpoint called with method: POST
+Test endpoint request body: { test: true }
+In queryHandler
+Received query request: { prompt: 'What meetings do I have today?', calendarId: 'primary' }
+Processing query: "What meetings do I have today?"

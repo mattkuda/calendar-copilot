@@ -20,9 +20,7 @@ Features:
 
 Authentication & Calendar Linking (Frontend/Backend):
 
-OAuth2 flow to connect Google Calendar
-
-Store OAuth tokens securely (likely in backend memory for MVP)
+Service account flow to connect Google Calendar
 
 MCP Server (Node CLI):
 
@@ -65,8 +63,6 @@ Frontend: Next.js (App Router), TypeScript, TailwindCSS, shadcn/ui
 Backend: Next.js API routes (for Google API proxy)
 
 MCP server: Node.js CLI w/ TypeScript and MCP SDK
-
-Auth: Google OAuth2
 
 LLM: OpenAI (natural language understanding)
 

@@ -2,12 +2,13 @@
 import * as dotenv from 'dotenv';
 import express, { Request, Response, Router, RequestHandler } from 'express';
 import { google } from 'googleapis';
-import { parseISO, addMinutes, format, startOfDay, endOfDay, addDays } from 'date-fns';
+import { parseISO, addMinutes, format, startOfDay, endOfDay, addDays, addHours } from 'date-fns';
 import path from 'path';
+import { processCalendarPrompt, generateCalendarQueryResponse, generateEventCreationResponse } from './llm';
+import { CalendarIntent } from './llm'; // Import the intent type
 
 // Load environment variables from root and local .env files
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config();
 
 // Simple API server for calendar operations
 const app = express();
@@ -170,14 +171,14 @@ const getEventsHandler: RequestHandler = (req, res) => {
                 auth = createServiceAuthClient();
                 console.log("Using service account authentication for calendar access");
             } catch (serviceAuthError) {
-                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError.message);
+                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError instanceof Error ? serviceAuthError.message : "Unknown error");
                 try {
                     auth = createAuthClient();
                     console.log("Using OAuth authentication for calendar access");
                 } catch (oauthError) {
                     res.status(401).json({
                         error: 'Authentication failed. Please set up Google Calendar authentication.',
-                        details: oauthError.message
+                        details: oauthError instanceof Error ? oauthError.message : "Unknown error"
                     });
                     return;
                 }
@@ -211,12 +212,12 @@ const getEventsHandler: RequestHandler = (req, res) => {
                 success: true,
                 events: response.data.items
             });
-        } catch (error: any) {
+        } catch (error) {
             console.error('Error fetching events:', error);
             res.status(500).json({
                 success: false,
                 error: 'Failed to fetch calendar events',
-                details: error.message || 'Unknown error'
+                details: error instanceof Error ? error.message : 'Unknown error'
             });
         }
     })();
@@ -241,14 +242,14 @@ const createEventHandler: RequestHandler = (req, res) => {
                 auth = createServiceAuthClient();
                 console.log("Using service account authentication for calendar access");
             } catch (serviceAuthError) {
-                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError.message);
+                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError instanceof Error ? serviceAuthError.message : "Unknown error");
                 try {
                     auth = createAuthClient();
                     console.log("Using OAuth authentication for calendar access");
                 } catch (oauthError) {
                     res.status(401).json({
                         error: 'Authentication failed. Please set up Google Calendar authentication.',
-                        details: oauthError.message
+                        details: oauthError instanceof Error ? oauthError.message : "Unknown error"
                     });
                     return;
                 }
@@ -262,7 +263,8 @@ const createEventHandler: RequestHandler = (req, res) => {
                 startTime = parseDate(datetime);
             } catch (error) {
                 res.status(400).json({
-                    error: `Invalid datetime format: ${datetime}`
+                    error: `Invalid datetime format: ${datetime}`,
+                    details: error instanceof Error ? error.message : 'Unknown error'
                 });
                 return;
             }
@@ -299,12 +301,12 @@ const createEventHandler: RequestHandler = (req, res) => {
                 success: true,
                 event: response.data
             });
-        } catch (error: any) {
+        } catch (error) {
             console.error('Error creating event:', error);
             res.status(500).json({
                 success: false,
                 error: 'Failed to create calendar event',
-                details: error.message || 'Unknown error'
+                details: error instanceof Error ? error.message : 'Unknown error'
             });
         }
     })();
@@ -360,6 +362,296 @@ const authStatusHandler: RequestHandler = (req, res) => {
     });
 };
 
+// Natural language query endpoint
+const queryHandler: RequestHandler = (req, res) => {
+    (async () => {
+        try {
+            console.log("In queryHandler");
+            console.log("Received query request:", req.body);
+            const { prompt, calendarId = 'primary' } = req.body;
+
+            if (!prompt) {
+                res.status(400).json({
+                    error: 'Prompt is required'
+                });
+                return;
+            }
+
+            console.log(`Processing query: "${prompt}"`);
+
+            // Use OpenAI to understand the user's intent
+            let intent: CalendarIntent | null = null;
+            try {
+                intent = await processCalendarPrompt(prompt);
+                if (!intent) {
+                    throw new Error("Failed to process intent");
+                }
+            } catch (error: any) {
+                console.error("Error processing intent with OpenAI:", error);
+                res.status(500).json({
+                    error: 'Failed to process your request with our AI',
+                    response: "I'm having trouble understanding your request. Please try again with a clearer instruction about your calendar.",
+                    details: error.message
+                });
+                return;
+            }
+
+            // Handle different intents
+            if (intent.intent === 'get_events') {
+                const { startDate: startDateStr, endDate: endDateStr } = intent.timeRange;
+
+                // Determine the date range for the query
+                let startDate, endDate;
+                try {
+                    startDate = parseDate(startDateStr);
+                    endDate = parseDate(endDateStr);
+                } catch (error: any) {
+                    console.error("Error parsing dates:", error);
+                    res.status(400).json({
+                        error: 'Invalid date format',
+                        response: "I couldn't understand the dates in your request. Please try again with clearer date information.",
+                        details: error.message
+                    });
+                    return;
+                }
+
+                try {
+                    // Try to use service account auth first, fall back to OAuth client
+                    let auth;
+                    try {
+                        auth = createServiceAuthClient();
+                        console.log("Using service account authentication for calendar access");
+                    } catch (serviceAuthError: unknown) {
+                        try {
+                            auth = createAuthClient();
+                            console.log("Using OAuth authentication for calendar access");
+                        } catch (oauthError: unknown) {
+                            res.status(401).json({
+                                error: 'Authentication failed. Please set up Google Calendar authentication.',
+                                details: oauthError instanceof Error ? oauthError.message : "Unknown error"
+                            });
+                            return;
+                        }
+                    }
+
+                    const calendar = google.calendar({ version: 'v3', auth });
+
+                    // Ensure the dates are the start and end of the day
+                    const timeMin = startOfDay(startDate).toISOString();
+                    const timeMax = endOfDay(endDate).toISOString();
+
+                    console.log(`Fetching events from calendar: ${calendarId} between ${timeMin} and ${timeMax}`);
+
+                    // Get events
+                    const response = await calendar.events.list({
+                        calendarId,
+                        timeMin,
+                        timeMax,
+                        singleEvents: true,
+                        orderBy: 'startTime',
+                        maxResults: 10,
+                    });
+
+                    const events = response.data.items || [];
+
+                    // Generate a human-friendly response with OpenAI
+                    const humanResponse = await generateCalendarQueryResponse(
+                        events,
+                        prompt,
+                        format(startDate, 'PPP'),
+                        format(endDate, 'PPP')
+                    );
+
+                    res.json({
+                        response: humanResponse,
+                        calendarQueried: true,
+                        events
+                    });
+
+                } catch (error: any) {
+                    console.error('Error fetching events:', error);
+
+                    // Send a mock response in case of error
+                    const mockEvents = [
+                        {
+                            summary: "Mock Team Meeting",
+                            start: { dateTime: addHours(new Date(), 3).toISOString() },
+                            end: { dateTime: addHours(new Date(), 4).toISOString() }
+                        },
+                        {
+                            summary: "Mock Client Call",
+                            start: { dateTime: addHours(addDays(new Date(), 1), 10).toISOString() },
+                            end: { dateTime: addHours(addDays(new Date(), 1), 11).toISOString() }
+                        }
+                    ];
+
+                    // Generate a message for mock data
+                    const mockResponse = await generateCalendarQueryResponse(
+                        mockEvents,
+                        prompt,
+                        format(new Date(), 'PPP'),
+                        format(addDays(new Date(), 7), 'PPP')
+                    );
+
+                    res.json({
+                        response: mockResponse + " (Note: Using mock data as the calendar connection failed)",
+                        calendarQueried: true,
+                        mockData: true,
+                        events: mockEvents,
+                        error: error.message
+                    });
+                }
+            }
+            else if (intent.intent === 'create_event') {
+                const { title, datetime: datetimeStr, duration, attendees = [] } = intent.eventDetails;
+
+                try {
+                    // Try to use service account auth first, fall back to OAuth client
+                    let auth;
+                    try {
+                        auth = createServiceAuthClient();
+                        console.log("Using service account authentication for calendar access");
+                    } catch (serviceAuthError: unknown) {
+                        try {
+                            auth = createAuthClient();
+                            console.log("Using OAuth authentication for calendar access");
+                        } catch (oauthError: unknown) {
+                            res.status(401).json({
+                                error: 'Authentication failed. Please set up Google Calendar authentication.',
+                                details: oauthError instanceof Error ? oauthError.message : "Unknown error"
+                            });
+                            return;
+                        }
+                    }
+
+                    const calendar = google.calendar({ version: 'v3', auth });
+
+                    // Parse start time
+                    let startTime;
+                    try {
+                        startTime = parseDate(datetimeStr);
+                    } catch (error) {
+                        res.status(400).json({
+                            error: `Invalid datetime format: ${datetimeStr}`,
+                            response: "I couldn't understand the date and time for your event. Please specify when you want to schedule it more clearly."
+                        });
+                        return;
+                    }
+
+                    // Calculate end time
+                    const endTime = addMinutes(startTime, duration);
+
+                    // Format attendees
+                    const formattedAttendees = attendees.map((email: string) => ({ email }));
+
+                    // Create event
+                    const event = {
+                        summary: title,
+                        start: {
+                            dateTime: startTime.toISOString(),
+                        },
+                        end: {
+                            dateTime: endTime.toISOString(),
+                        },
+                        attendees: formattedAttendees,
+                    };
+
+                    console.log(`Creating event "${title}" in calendar: ${calendarId}`);
+
+                    const response = await calendar.events.insert({
+                        calendarId,
+                        requestBody: event,
+                    });
+
+                    // Generate a human-friendly response with OpenAI
+                    const humanResponse = await generateEventCreationResponse(
+                        response.data,
+                        prompt
+                    );
+
+                    res.json({
+                        response: humanResponse,
+                        eventCreated: true,
+                        event: {
+                            id: response.data.id,
+                            summary: response.data.summary,
+                            description: response.data.description,
+                            start: response.data.start,
+                            end: response.data.end,
+                            location: response.data.location,
+                            attendees: response.data.attendees,
+                            htmlLink: response.data.htmlLink
+                        }
+                    });
+
+                } catch (error: any) {
+                    console.error('Error creating event:', error);
+
+                    // Create mock event for response
+                    const mockEvent = {
+                        summary: title,
+                        start: { dateTime: parseDate(datetimeStr).toISOString() },
+                        end: { dateTime: addMinutes(parseDate(datetimeStr), duration).toISOString() },
+                        attendees: attendees.map((email: string) => ({ email }))
+                    };
+
+                    // Generate a message for mock data
+                    const mockResponse = await generateEventCreationResponse(
+                        mockEvent,
+                        prompt
+                    );
+
+                    res.json({
+                        response: mockResponse + " (Note: This is a mock event as the calendar connection failed)",
+                        eventCreated: true,
+                        mockData: true,
+                        event: mockEvent,
+                        error: error.message
+                    });
+                }
+            }
+            else {
+                // Handle unknown intent
+                res.json({
+                    response: intent.description || "I'm not sure what you're asking about your calendar. You can try asking about your upcoming events or create a new event.",
+                    intent: 'unknown'
+                });
+            }
+        } catch (error: any) {
+            console.error('Error processing natural language query:', error);
+            res.status(500).json({
+                success: false,
+                error: 'Failed to process your request',
+                details: error.message || 'Unknown error',
+                response: "Sorry, I couldn't process that request. Please try again with clearer instructions about your calendar."
+            });
+        }
+    })();
+};
+
+// Test endpoint
+const testHandler: RequestHandler = (req, res) => {
+    console.log("Test endpoint called with method:", req.method);
+    console.log("Test endpoint request body:", req.body);
+
+    res.json({
+        success: true,
+        message: "Test endpoint is working",
+        method: req.method,
+        receivedData: req.body
+    });
+};
+
+// Add global error handler middleware
+const errorHandler = (err: any, req: Request, res: Response, next: any) => {
+    console.error('Global error handler caught:', err);
+    res.status(500).json({
+        success: false,
+        error: 'Internal server error',
+        message: err.message || 'Unknown error'
+    });
+};
+
 // Register routes
 router.get('/calendar/events', getEventsHandler);
 router.post('/calendar/create', createEventHandler);
@@ -367,9 +659,25 @@ router.post('/auth/set-tokens', setTokensHandler);
 router.get('/auth/google', googleAuthHandler);
 router.get('/auth/callback', googleAuthCallbackHandler);
 router.get('/auth/status', authStatusHandler);
+router.post('/calendar/query', queryHandler);
+router.post('/test', testHandler);
+router.get('/test', testHandler); // Add GET support for easier testing
 
 // Register router with prefix
 app.use('/api', router);
+
+// Add the error handler after all other middleware and routes
+app.use(errorHandler);
+
+// Add a default 404 handler
+app.use((req, res) => {
+    console.log(`404 Not Found: ${req.method} ${req.originalUrl}`);
+    res.status(404).json({
+        success: false,
+        error: 'Not Found',
+        message: `Endpoint not found: ${req.method} ${req.originalUrl}`
+    });
+});
 
 // Start server
 const PORT = process.env.PORT || 3100;
