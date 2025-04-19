@@ -3,9 +3,11 @@ import * as dotenv from 'dotenv';
 import express, { Request, Response, Router, RequestHandler } from 'express';
 import { google } from 'googleapis';
 import { parseISO, addMinutes, format, startOfDay, endOfDay, addDays } from 'date-fns';
+import path from 'path';
 
-// Load environment variables
-dotenv.config();
+// Load environment variables from root and local .env files
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // Simple API server for calendar operations
 const app = express();
@@ -20,8 +22,9 @@ let refreshToken = '';
 
 // Create OAuth2 client
 const createAuthClient = () => {
+    // Check for client credentials
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-        throw new Error('Missing Google API credentials');
+        throw new Error('Missing Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.');
     }
 
     const client = new google.auth.OAuth2(
@@ -43,10 +46,29 @@ const createAuthClient = () => {
     return client;
 };
 
+// Create service account auth client
+const createServiceAuthClient = () => {
+    const serviceAccountPrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n');
+    const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+
+    if (!serviceAccountPrivateKey || !serviceAccountEmail) {
+        throw new Error('Missing Google service account credentials. Please set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY in your .env file.');
+    }
+
+    return new google.auth.JWT({
+        email: serviceAccountEmail,
+        key: serviceAccountPrivateKey,
+        scopes: [
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/calendar.events'
+        ]
+    });
+};
+
 // Create Google OAuth client for auth
 const getGoogleAuthClient = () => {
     if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-        throw new Error('Missing Google API credentials');
+        throw new Error('Missing Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.');
     }
 
     return new google.auth.OAuth2(
@@ -121,10 +143,10 @@ const googleAuthCallbackHandler: RequestHandler = (req, res) => {
             if (tokens.refresh_token) refreshToken = tokens.refresh_token;
 
             // Redirect to frontend success page
-            res.redirect('http://localhost:3000/dashboard?auth=success');
+            res.redirect(`${process.env.NEXT_PUBLIC_WEB_APP_URL || 'http://localhost:3000'}/dashboard?auth=success`);
         } catch (error) {
             console.error('Callback error:', error);
-            res.redirect('http://localhost:3000/auth/signin?error=callback_failed');
+            res.redirect(`${process.env.NEXT_PUBLIC_WEB_APP_URL || 'http://localhost:3000'}/auth/signin?error=callback_failed`);
         }
     })();
 };
@@ -133,7 +155,7 @@ const googleAuthCallbackHandler: RequestHandler = (req, res) => {
 const getEventsHandler: RequestHandler = (req, res) => {
     (async () => {
         try {
-            const { startDate, endDate } = req.query;
+            const { startDate, endDate, calendarId = 'primary' } = req.query;
 
             if (!startDate || !endDate) {
                 res.status(400).json({
@@ -142,7 +164,25 @@ const getEventsHandler: RequestHandler = (req, res) => {
                 return;
             }
 
-            const auth = createAuthClient();
+            // Try to use service account auth first, fall back to OAuth client
+            let auth;
+            try {
+                auth = createServiceAuthClient();
+                console.log("Using service account authentication for calendar access");
+            } catch (serviceAuthError) {
+                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError.message);
+                try {
+                    auth = createAuthClient();
+                    console.log("Using OAuth authentication for calendar access");
+                } catch (oauthError) {
+                    res.status(401).json({
+                        error: 'Authentication failed. Please set up Google Calendar authentication.',
+                        details: oauthError.message
+                    });
+                    return;
+                }
+            }
+
             const calendar = google.calendar({ version: 'v3', auth });
 
             // Parse dates
@@ -153,20 +193,30 @@ const getEventsHandler: RequestHandler = (req, res) => {
             const timeMin = startOfDay(startDateObj).toISOString();
             const timeMax = endOfDay(endDateObj).toISOString();
 
+            console.log(`Fetching events from calendar: ${calendarId} between ${timeMin} and ${timeMax}`);
+
             // Get events
             const response = await calendar.events.list({
-                calendarId: 'primary',
+                calendarId: calendarId as string,
                 timeMin,
                 timeMax,
                 singleEvents: true,
                 orderBy: 'startTime',
+                maxResults: 100,
             });
 
-            res.json({ events: response.data.items });
-        } catch (error) {
+            console.log(`Successfully fetched ${response.data.items?.length || 0} events`);
+
+            res.json({
+                success: true,
+                events: response.data.items
+            });
+        } catch (error: any) {
             console.error('Error fetching events:', error);
             res.status(500).json({
-                error: 'Failed to fetch calendar events'
+                success: false,
+                error: 'Failed to fetch calendar events',
+                details: error.message || 'Unknown error'
             });
         }
     })();
@@ -176,7 +226,7 @@ const getEventsHandler: RequestHandler = (req, res) => {
 const createEventHandler: RequestHandler = (req, res) => {
     (async () => {
         try {
-            const { title, datetime, duration, attendees = [] } = req.body;
+            const { title, datetime, duration, attendees = [], calendarId = 'primary' } = req.body;
 
             if (!title || !datetime || !duration) {
                 res.status(400).json({
@@ -185,7 +235,25 @@ const createEventHandler: RequestHandler = (req, res) => {
                 return;
             }
 
-            const auth = createAuthClient();
+            // Try to use service account auth first, fall back to OAuth client
+            let auth;
+            try {
+                auth = createServiceAuthClient();
+                console.log("Using service account authentication for calendar access");
+            } catch (serviceAuthError) {
+                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError.message);
+                try {
+                    auth = createAuthClient();
+                    console.log("Using OAuth authentication for calendar access");
+                } catch (oauthError) {
+                    res.status(401).json({
+                        error: 'Authentication failed. Please set up Google Calendar authentication.',
+                        details: oauthError.message
+                    });
+                    return;
+                }
+            }
+
             const calendar = google.calendar({ version: 'v3', auth });
 
             // Parse start time
@@ -217,20 +285,26 @@ const createEventHandler: RequestHandler = (req, res) => {
                 attendees: formattedAttendees,
             };
 
+            console.log(`Creating event "${title}" in calendar: ${calendarId}`);
+
             const response = await calendar.events.insert({
-                calendarId: 'primary',
+                calendarId: calendarId as string,
                 requestBody: event,
+                sendUpdates: 'all', // Send emails to attendees
             });
+
+            console.log(`Event created successfully: ${response.data.htmlLink}`);
 
             res.json({
                 success: true,
                 event: response.data
             });
-        } catch (error) {
+        } catch (error: any) {
             console.error('Error creating event:', error);
             res.status(500).json({
                 success: false,
-                error: 'Failed to create calendar event'
+                error: 'Failed to create calendar event',
+                details: error.message || 'Unknown error'
             });
         }
     })();
@@ -252,19 +326,37 @@ const setTokensHandler: RequestHandler = (req, res) => {
         refreshToken = refreshTokenNew;
 
         res.json({ success: true });
-    } catch (error) {
+    } catch (error: any) {
         console.error('Error setting tokens:', error);
         res.status(500).json({
             success: false,
-            error: 'Failed to set tokens'
+            error: 'Failed to set tokens',
+            details: error.message || 'Unknown error'
         });
     }
 };
 
 // Auth status endpoint
 const authStatusHandler: RequestHandler = (req, res) => {
+    const hasOAuth = !!(accessToken && refreshToken);
+    let hasServiceAccount = false;
+
+    try {
+        // Check if service account credentials are available
+        const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
+        const serviceAccountPrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
+        hasServiceAccount = !!(serviceAccountEmail && serviceAccountPrivateKey);
+    } catch (error) {
+        console.warn("Error checking service account:", error);
+    }
+
     res.json({
-        authenticated: !!(accessToken && refreshToken)
+        success: true,
+        authenticated: hasOAuth || hasServiceAccount,
+        authMethods: {
+            oauth: hasOAuth,
+            serviceAccount: hasServiceAccount
+        }
     });
 };
 
@@ -283,4 +375,6 @@ app.use('/api', router);
 const PORT = process.env.PORT || 3100;
 app.listen(PORT, () => {
     console.log(`Calendar Copilot API server running on port ${PORT}`);
+    console.log(`Service Account configured: ${!!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL}`);
+    console.log(`OAuth credentials configured: ${!!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)}`);
 }); 

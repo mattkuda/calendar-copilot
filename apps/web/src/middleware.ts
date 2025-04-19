@@ -11,54 +11,53 @@ const publicRoutes = [
     "/api/webhooks/clerk"
 ];
 
-// Clerk-specific callback patterns
-const authCallbackPatterns = [
-    /^\/auth\/signin\/sso-callback(.*)/,
-    /^\/clerk(.*)/,
-    /^\/verify(.*)/
+// Clerk-specific paths that should always pass through
+const clerkRoutes = [
+    "/sign-in(.*)",
+    "/sign-up(.*)",
+    "/sso-callback(.*)",
+    "/(api|trpc)(.*)"
 ];
 
 const isPublicRoute = createRouteMatcher(publicRoutes);
+const isClerkRoute = createRouteMatcher(clerkRoutes);
 const isApiRoute = createRouteMatcher(["/api(.*)"]);
 const shouldRedirectToDashboard = createRouteMatcher(["/auth/signin(.*)", "/auth/signup(.*)"]);
 const shouldRedirectToSignIn = createRouteMatcher(["/dashboard(.*)"]);
 
-export default clerkMiddleware(async (auth, request) => {
+export default clerkMiddleware(async (auth, req) => {
     const { userId } = await auth();
-    const req = request as NextRequest;
-    const { pathname } = req.nextUrl;
+    const request = req as NextRequest;
+    const { pathname } = request.nextUrl;
 
-    // Check for auth callback URLs and allow them to proceed
-    // This is critical for OAuth and other authentication flows
-    for (const pattern of authCallbackPatterns) {
-        if (pattern.test(pathname)) {
-            return NextResponse.next();
-        }
+    // Always pass through Clerk's internal routes
+    if (isClerkRoute(request)) {
+        return NextResponse.next();
     }
 
     // ✅ Allow API requests to pass through
-    if (isApiRoute(req)) {
+    if (isApiRoute(request)) {
         return NextResponse.next();
     }
 
     // ✅ Handle public routes
-    if (isPublicRoute(req)) {
+    if (isPublicRoute(request)) {
         // If authenticated and accessing sign-in/sign-up, redirect to dashboard
-        if (userId && shouldRedirectToDashboard(req)) {
-            return NextResponse.redirect(new URL("/dashboard", req.url));
+        if (userId && shouldRedirectToDashboard(request)) {
+            return NextResponse.redirect(new URL("/dashboard", request.url));
         }
 
         // If authenticated and visiting the homepage, redirect to dashboard
         if (userId && pathname === "/") {
-            return NextResponse.redirect(new URL("/dashboard", req.url));
+            return NextResponse.redirect(new URL("/dashboard", request.url));
         }
 
         return NextResponse.next();
     }
 
     // ✅ Handle protected routes
-    if (!userId && shouldRedirectToSignIn(req)) {
-        return NextResponse.redirect(new URL("/auth/signin", req.url));
+    if (!userId && shouldRedirectToSignIn(request)) {
+        return NextResponse.redirect(new URL("/auth/signin", request.url));
     }
 
     return NextResponse.next();
