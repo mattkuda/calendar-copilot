@@ -318,25 +318,8 @@ export default function DashboardPage() {
                     Your Google Calendar is connected. Use Calendar Copilot to interact with your calendar.
                 </p>
             </div>
-
             {/* Google Calendar Integration Section */}
             <div className="p-4 bg-card border rounded-md mb-8">
-                <h2 className="text-lg font-semibold mb-3">Google Calendar Integration</h2>
-
-                <div className="mb-4">
-                    <p className="text-sm text-blue-700 bg-blue-50 p-3 rounded-md border border-blue-200">
-                        <strong>Setup Instructions:</strong>
-                        <ol className="list-decimal ml-5 mt-1">
-                            <li>Go to your <a href="https://calendar.google.com/calendar/r/settings" target="_blank" rel="noopener noreferrer" className="text-blue-600 underline">Google Calendar Settings</a></li>
-                            <li>Under "Settings for my calendars," click on the calendar you want to use</li>
-                            <li>Scroll down to "Share with specific people or groups"</li>
-                            <li>Add our service account email: <code className="bg-gray-100 px-1">{SERVICE_ACCOUNT_EMAIL}</code></li>
-                            <li>Set permission to "Make changes to events"</li>
-                            <li>Copy your Calendar ID from the "Integrate calendar" section below</li>
-                        </ol>
-                    </p>
-                </div>
-
                 <div className="space-y-3 mb-4">
                     <div>
                         <p className="text-sm font-medium mb-1">Your Google Calendar ID:</p>
@@ -373,24 +356,6 @@ export default function DashboardPage() {
                     </p>
                 )}
             </div>
-
-            <div className="bg-blue-50 border border-blue-200 rounded-md p-4 mb-6">
-                <h3 className="text-sm font-medium text-blue-800 mb-2">Google Calendar Integration Setup</h3>
-                <p className="text-sm text-blue-700 mb-2">
-                    This app uses a service account to access your Google Calendar. To enable integration:
-                </p>
-                <ol className="text-sm text-blue-700 ml-4 list-decimal space-y-1">
-                    <li>Enter your Gmail or Google Workspace email as your Calendar ID below</li>
-                    <li>Share your calendar with our service account: <code className="bg-blue-100 px-1">{process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || 'service-account@example.com'}</code></li>
-                    <li>Give the service account "Make changes to events" permission</li>
-                </ol>
-                <p className="text-sm text-blue-700 mt-2">
-                    <a href="https://calendar.google.com/calendar/u/0/r/settings" target="_blank" rel="noopener noreferrer" className="underline">
-                        Open your Google Calendar settings →
-                    </a>
-                </p>
-            </div>
-
             <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                 <div className="md:col-span-2">
                     <div className="rounded-lg border bg-card text-card-foreground shadow-sm p-6">
