@@ -1,14 +1,36 @@
 # Calendar Copilot
 
-An AI-powered calendar assistant that integrates with Claude for Desktop using MCP.
+An AI-powered calendar assistant that integrates with Claude for Desktop using the Model Context Protocol (MCP).
 
 ## Overview
 
-Calendar Copilot allows users to:
+Calendar Copilot is a demonstration of the Model Context Protocol (MCP) integration pattern, allowing users to:
 
 - Connect their Google Calendar via OAuth2
-- Query their calendar using natural language through Claude
+- Query their calendar using natural language through the web UI (using OpenAI)
 - Create new calendar events using natural language instructions
+- Connect directly to the MCP server from Claude for Desktop
+
+## Architecture
+
+This project follows the Model Context Protocol pattern with three main components:
+
+1. **MCP Server** (`apps/mcp-server`): A standalone Node.js server that:
+   - Implements the MCP protocol to expose calendar tools
+   - Provides two primary tools: `get-events-range` and `create-event`
+   - Handles Google Calendar API operations without any LLM logic
+   - Can be accessed by Claude for Desktop via MCP protocol
+
+2. **Next.js App** (`apps/web`): A full-stack web application that:
+   - Provides a user interface for interacting with the calendar
+   - Includes an API route (`/api/openai-calendar-agent`) that acts as an MCP client
+   - Orchestrates OpenAI's interaction with the MCP server
+   - Manages user authentication via Clerk
+
+3. **Shared Library** (`packages/shared`): Common code including:
+   - Type definitions
+   - Schema validations
+   - Utility functions
 
 ## Project Structure
 
@@ -18,60 +40,56 @@ This monorepo contains:
 - `apps/mcp-server`: Node.js CLI that provides MCP tools for Claude
 - `packages/shared`: Shared utilities, types, and API functions
 
-## Google Calendar Integration Setup
+## Google Calendar Integration
 
-### Step 1: Create a Google Cloud Project
+### Development Mode
 
-1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or use an existing one)
-3. Enable the Google Calendar API in "APIs & Services" > "Library"
+In development, the application includes a fallback to mock data if Google Calendar integration is not properly configured. This allows for easier testing without requiring a full Google setup.
 
-### Step 2: Set Up Service Account for Calendar Access
+### Production Mode
 
-1. Go to "IAM & Admin" > "Service Accounts" and create a new service account
-2. Give it a descriptive name (e.g., "Calendar Copilot Service")
-3. Skip role assignment (or assign minimal roles if needed)
-4. Create a JSON key for the service account:
-   - Click on the service account
-   - Go to the "Keys" tab
-   - Click "Add Key" > "Create new key"
-   - Select JSON format
+For production use, you'll need to configure Google Calendar integration:
+
+1. Set up a Google Cloud project with Calendar API enabled
+2. Create a service account for server-side operations
+3. Configure OAuth credentials for user-based authentication (optional)
+4. Share calendars with the service account
+
+### Setup Steps
+
+1. **Create a Google Cloud Project**
+   - Go to the [Google Cloud Console](https://console.cloud.google.com/)
+   - Create a new project
+   - Enable the Google Calendar API in "APIs & Services" > "Library"
+
+2. **Set Up Service Account for Calendar Access**
+   - Go to "IAM & Admin" > "Service Accounts" and create a new service account
+   - Give it a descriptive name (e.g., "Calendar Copilot Service")
+   - Create a JSON key for the service account
    - Download the key file
 
-### Step 3: Configure Environment Variables
+3. **Configure Environment Variables**
+   - Copy the `.env.example` files to `.env` in the respective directories
+   - Fill in the service account credentials
 
-1. Copy the `.env.example` file to `.env` in the root directory:
-   ```
-   cp .env.example .env
-   ```
+4. **Share Calendars with the Service Account**
+   - Have users go to [Google Calendar](https://calendar.google.com/)
+   - Open settings for the relevant calendar
+   - Share with the service account email address
+   - Set appropriate permissions (at least "Make changes to events")
 
-2. Fill in the service account credentials:
-   ```
-   GOOGLE_SERVICE_ACCOUNT_EMAIL=your-service-account@project-id.iam.gserviceaccount.com
-   GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nYour private key here...\n-----END PRIVATE KEY-----\n"
-   ```
-   
-   Note: Make sure to preserve newlines with `\n` in the private key
+## MCP Integration with Claude
 
-3. (Optional) Set up OAuth credentials if you want user-based authentication:
-   - Create OAuth consent screen in Google Cloud Console
-   - Create OAuth client ID (Web application type)
-   - Add authorized redirect URIs for your application
-   - Set the credentials in .env:
-     ```
-     GOOGLE_CLIENT_ID=your-oauth-client-id
-     GOOGLE_CLIENT_SECRET=your-oauth-client-secret
-     ```
+The MCP server exposes two main tools to Claude:
 
-### Step 4: Share Calendars with the Service Account
+1. `get-events-range({ startDate, endDate })`: Retrieves calendar events within a date range
+2. `create-event({ title, datetime, duration, attendees })`: Creates a new calendar event
 
-To access user calendars, each user needs to share their calendar with the service account:
+To connect Claude to the MCP server:
 
-1. Have users go to [Google Calendar](https://calendar.google.com/)
-2. Open settings for the relevant calendar ("Settings and sharing")
-3. Go to "Share with specific people or groups"
-4. Add the service account email address
-5. Set appropriate permissions (at least "Make changes to events")
+1. Start the MCP server: `cd apps/mcp-server && npm run dev`
+2. In Claude for Desktop, set up a connection to `http://localhost:3100/api/manifest`
+3. You can then use natural language to interact with your calendar
 
 ## Getting Started
 
@@ -79,7 +97,8 @@ To access user calendars, each user needs to share their calendar with the servi
 
 - Node.js 18+
 - Google Developer Account with Calendar API enabled
-- Claude for Desktop with MCP
+- Claude for Desktop with MCP (for direct Claude integration)
+- OpenAI API key (for web UI integration)
 
 ### Installation
 
@@ -89,19 +108,15 @@ To access user calendars, each user needs to share their calendar with the servi
    npm install
    ```
 
-3. Run the development servers:
+3. Install additional dependencies in the web app:
+   ```
+   cd apps/web && npm install openai
+   ```
+
+4. Run the development servers:
    ```
    npm run dev
    ```
-
-## MCP Integration
-
-The MCP server exposes two main functions to Claude:
-
-1. `get-events-range({ startDate, endDate })`: Retrieves calendar events within a date range
-2. `create-event({ title, datetime, duration, attendees })`: Creates a new calendar event
-
-For detailed MCP setup instructions, see [docs/CLAUDE_INTEGRATION.md](docs/CLAUDE_INTEGRATION.md).
 
 ## License
 

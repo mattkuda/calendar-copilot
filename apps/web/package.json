@@ -10,7 +10,7 @@
     },
     "dependencies": {
         "@calendar-copilot/shared": "*",
-        "@clerk/nextjs": "^4.29.9",
+        "@clerk/nextjs": "^6.8.0",
         "@hookform/resolvers": "^3.3.2",
         "@radix-ui/react-avatar": "^1.0.4",
         "@radix-ui/react-dropdown-menu": "^2.0.6",

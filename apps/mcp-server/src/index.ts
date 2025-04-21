@@ -1,684 +1,255 @@
 #!/usr/bin/env node
 import * as dotenv from 'dotenv';
 import express, { Request, Response, Router, RequestHandler } from 'express';
-import { google } from 'googleapis';
-import { parseISO, addMinutes, format, startOfDay, endOfDay, addDays, addHours } from 'date-fns';
 import path from 'path';
-import { processCalendarPrompt, generateCalendarQueryResponse, generateEventCreationResponse } from './llm';
-import { CalendarIntent } from './llm'; // Import the intent type
+import cors from 'cors';
+import { z } from 'zod';
+import { executeGetEventsRange, executeCreateEvent } from './googleCalendar';
 
-// This is now working
+// Load .env files
 dotenv.config();
 
-// Simple API server for calendar operations
+// Initialize Express app
 const app = express();
-app.use(express.json());
 
-// Create router for API routes
+// Middleware
+app.use(express.json());
+app.use(cors({
+    origin: process.env.WEB_APP_URL || 'http://localhost:3000',
+    methods: ['GET', 'POST', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Router for API routes
 const router = Router();
 
-// Mock tokens - in a production app, store securely
-let accessToken = '';
-let refreshToken = '';
+// Tool schemas - following the MCP protocol specifications
+const getEventsRangeParamsSchema = z.object({
+    startDate: z.string().describe('Start date in ISO format (YYYY-MM-DD) or natural language (e.g., "today", "tomorrow")'),
+    endDate: z.string().describe('End date in ISO format (YYYY-MM-DD) or natural language (e.g., "today", "tomorrow")'),
+    calendarId: z.string().optional().describe('Google Calendar ID, defaults to primary calendar')
+});
 
-// Create OAuth2 client
-const createAuthClient = () => {
-    // Check for client credentials
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-        throw new Error('Missing Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.');
-    }
+const createEventParamsSchema = z.object({
+    title: z.string().describe('Title of the event'),
+    datetime: z.string().describe('Start date and time of the event in ISO format or natural language'),
+    duration: z.number().describe('Duration of the event in minutes'),
+    attendees: z.array(z.string()).optional().describe('List of email addresses of attendees'),
+    calendarId: z.string().optional().describe('Google Calendar ID, defaults to primary calendar')
+});
 
-    const client = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.REDIRECT_URI || 'http://localhost:3000/api/auth/callback/google'
-    );
-
-    // Set tokens (for MVP - in production these would be retrieved from secure storage)
-    if (accessToken && refreshToken) {
-        client.setCredentials({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-        });
-    } else {
-        throw new Error('No Google Calendar authorization. Please connect your calendar first.');
-    }
-
-    return client;
-};
-
-// Create service account auth client
-const createServiceAuthClient = () => {
-    const serviceAccountPrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n');
-    const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-
-    if (!serviceAccountPrivateKey || !serviceAccountEmail) {
-        throw new Error('Missing Google service account credentials. Please set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY in your .env file.');
-    }
-
-    return new google.auth.JWT({
-        email: serviceAccountEmail,
-        key: serviceAccountPrivateKey,
-        scopes: [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/calendar.events'
-        ]
-    });
-};
-
-// Create Google OAuth client for auth
-const getGoogleAuthClient = () => {
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-        throw new Error('Missing Google API credentials. Please set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in your .env file.');
-    }
-
-    return new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        'http://localhost:3100/api/auth/callback' // Callback URL for this server
-    );
-};
-
-// Parse natural language dates
-const parseDate = (dateStr: string): Date => {
-    // Handle natural language dates
-    if (dateStr.toLowerCase() === 'today') {
-        return new Date();
-    } else if (dateStr.toLowerCase() === 'tomorrow') {
-        return addDays(new Date(), 1);
-    } else if (dateStr.toLowerCase() === 'next week') {
-        return addDays(new Date(), 7);
-    }
-
-    // Try to parse as ISO date
-    try {
-        return parseISO(dateStr);
-    } catch (error) {
-        throw new Error(`Invalid date format: ${dateStr}`);
-    }
-};
-
-// Google Auth route
-const googleAuthHandler: RequestHandler = (req, res) => {
-    try {
-        const oauth2Client = getGoogleAuthClient();
-
-        // Generate auth URL with calendar scopes
-        const scopes = [
-            'https://www.googleapis.com/auth/calendar',
-            'https://www.googleapis.com/auth/calendar.events',
-        ];
-
-        const authUrl = oauth2Client.generateAuthUrl({
-            access_type: 'offline',
-            scope: scopes,
-            prompt: 'consent', // Force to get refresh token
-        });
-
-        res.redirect(authUrl);
-    } catch (error) {
-        console.error('Auth error:', error);
-        res.status(500).json({
-            error: 'Authentication failed'
-        });
-    }
-};
-
-// Google Auth Callback
-const googleAuthCallbackHandler: RequestHandler = (req, res) => {
-    (async () => {
-        try {
-            const oauth2Client = getGoogleAuthClient();
-            const { code } = req.query;
-
-            if (!code) {
-                res.status(400).json({ error: 'Missing authorization code' });
-                return;
-            }
-
-            // Exchange code for tokens
-            const { tokens } = await oauth2Client.getToken(code as string);
-
-            // Store tokens (in memory for this demo)
-            if (tokens.access_token) accessToken = tokens.access_token;
-            if (tokens.refresh_token) refreshToken = tokens.refresh_token;
-
-            // Redirect to frontend success page
-            res.redirect(`${process.env.NEXT_PUBLIC_WEB_APP_URL || 'http://localhost:3000'}/dashboard?auth=success`);
-        } catch (error) {
-            console.error('Callback error:', error);
-            res.redirect(`${process.env.NEXT_PUBLIC_WEB_APP_URL || 'http://localhost:3000'}/auth/signin?error=callback_failed`);
-        }
-    })();
-};
-
-// Get events endpoint
-const getEventsHandler: RequestHandler = (req, res) => {
-    (async () => {
-        try {
-            const { startDate, endDate, calendarId = 'primary' } = req.query;
-
-            if (!startDate || !endDate) {
-                res.status(400).json({
-                    error: 'startDate and endDate are required'
-                });
-                return;
-            }
-
-            // Try to use service account auth first, fall back to OAuth client
-            let auth;
-            try {
-                auth = createServiceAuthClient();
-                console.log("Using service account authentication for calendar access");
-            } catch (serviceAuthError) {
-                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError instanceof Error ? serviceAuthError.message : "Unknown error");
-                try {
-                    auth = createAuthClient();
-                    console.log("Using OAuth authentication for calendar access");
-                } catch (oauthError) {
-                    res.status(401).json({
-                        error: 'Authentication failed. Please set up Google Calendar authentication.',
-                        details: oauthError instanceof Error ? oauthError.message : "Unknown error"
-                    });
-                    return;
-                }
-            }
-
-            const calendar = google.calendar({ version: 'v3', auth });
-
-            // Parse dates
-            const startDateObj = parseDate(startDate as string);
-            const endDateObj = parseDate(endDate as string);
-
-            // Ensure the dates are the start and end of the day
-            const timeMin = startOfDay(startDateObj).toISOString();
-            const timeMax = endOfDay(endDateObj).toISOString();
-
-            console.log(`Fetching events from calendar: ${calendarId} between ${timeMin} and ${timeMax}`);
-
-            // Get events
-            const response = await calendar.events.list({
-                calendarId: calendarId as string,
-                timeMin,
-                timeMax,
-                singleEvents: true,
-                orderBy: 'startTime',
-                maxResults: 100,
-            });
-
-            console.log(`Successfully fetched ${response.data.items?.length || 0} events`);
-
-            res.json({
-                success: true,
-                events: response.data.items
-            });
-        } catch (error) {
-            console.error('Error fetching events:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to fetch calendar events',
-                details: error instanceof Error ? error.message : 'Unknown error'
-            });
-        }
-    })();
-};
-
-// Create event endpoint
-const createEventHandler: RequestHandler = (req, res) => {
-    (async () => {
-        try {
-            const { title, datetime, duration, calendarId = 'primary' } = req.body;
-
-            if (!title || !datetime || !duration) {
-                res.status(400).json({
-                    error: 'title, datetime, and duration are required'
-                });
-                return;
-            }
-
-            // Try to use service account auth first, fall back to OAuth client
-            let auth;
-            try {
-                auth = createServiceAuthClient();
-                console.log("Using service account authentication for calendar access");
-            } catch (serviceAuthError) {
-                console.warn("Service account auth failed, falling back to OAuth:", serviceAuthError instanceof Error ? serviceAuthError.message : "Unknown error");
-                try {
-                    auth = createAuthClient();
-                    console.log("Using OAuth authentication for calendar access");
-                } catch (oauthError) {
-                    res.status(401).json({
-                        error: 'Authentication failed. Please set up Google Calendar authentication.',
-                        details: oauthError instanceof Error ? oauthError.message : "Unknown error"
-                    });
-                    return;
-                }
-            }
-
-            const calendar = google.calendar({ version: 'v3', auth });
-
-            // Parse start time
-            let startTime: Date;
-            try {
-                startTime = parseDate(datetime);
-            } catch (error) {
-                res.status(400).json({
-                    error: `Invalid datetime format: ${datetime}`,
-                    details: error instanceof Error ? error.message : 'Unknown error'
-                });
-                return;
-            }
-
-            // Calculate end time
-            const endTime = addMinutes(startTime, duration);
-
-            // Create event
-            const event = {
-                summary: title,
-                start: {
-                    dateTime: startTime.toISOString(),
-                },
-                end: {
-                    dateTime: endTime.toISOString(),
-                },
-            };
-
-            console.log(`Creating event "${title}" in calendar: ${calendarId}`);
-
-            const response = await calendar.events.insert({
-                calendarId: calendarId as string,
-                requestBody: event,
-            });
-
-            console.log(`Event created successfully: ${response.data.htmlLink}`);
-
-            res.json({
-                success: true,
-                event: response.data
-            });
-        } catch (error) {
-            console.error('Error creating event:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to create calendar event',
-                details: error instanceof Error ? error.message : 'Unknown error'
-            });
-        }
-    })();
-};
-
-// Set tokens endpoint
-const setTokensHandler: RequestHandler = (req, res) => {
-    try {
-        const { accessTokenNew, refreshTokenNew } = req.body;
-
-        if (!accessTokenNew || !refreshTokenNew) {
-            res.status(400).json({
-                error: 'Access token and refresh token are required'
-            });
-            return;
-        }
-
-        accessToken = accessTokenNew;
-        refreshToken = refreshTokenNew;
-
-        res.json({ success: true });
-    } catch (error: any) {
-        console.error('Error setting tokens:', error);
-        res.status(500).json({
-            success: false,
-            error: 'Failed to set tokens',
-            details: error.message || 'Unknown error'
-        });
-    }
-};
-
-// Auth status endpoint
-const authStatusHandler: RequestHandler = (req, res) => {
-    const hasOAuth = !!(accessToken && refreshToken);
-    let hasServiceAccount = false;
-
-    try {
-        // Check if service account credentials are available
-        const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
-        const serviceAccountPrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY;
-        hasServiceAccount = !!(serviceAccountEmail && serviceAccountPrivateKey);
-    } catch (error) {
-        console.warn("Error checking service account:", error);
-    }
-
-    res.json({
-        success: true,
-        authenticated: hasOAuth || hasServiceAccount,
-        authMethods: {
-            oauth: hasOAuth,
-            serviceAccount: hasServiceAccount
-        }
-    });
-};
-
-// Natural language query endpoint
-const queryHandler: RequestHandler = (req, res) => {
-    (async () => {
-        try {
-            console.log("In queryHandler");
-            console.log("Received query request:", req.body);
-            const { prompt, calendarId = 'primary' } = req.body;
-
-            if (!prompt) {
-                res.status(400).json({
-                    error: 'Prompt is required'
-                });
-                return;
-            }
-
-            console.log(`Processing query: "${prompt}"`);
-
-            // Use OpenAI to understand the user's intent
-            let intent: CalendarIntent | null = null;
-            try {
-                intent = await processCalendarPrompt(prompt);
-                if (!intent) {
-                    throw new Error("Failed to process intent");
-                }
-            } catch (error: any) {
-                console.error("Error processing intent with OpenAI:", error);
-                res.status(500).json({
-                    error: 'Failed to process your request with our AI',
-                    response: "I'm having trouble understanding your request. Please try again with a clearer instruction about your calendar.",
-                    details: error.message
-                });
-                return;
-            }
-
-            // Handle different intents
-            if (intent.intent === 'get_events') {
-                const { startDate: startDateStr, endDate: endDateStr } = intent.timeRange;
-
-                // Determine the date range for the query
-                let startDate, endDate;
-                try {
-                    startDate = parseDate(startDateStr);
-                    endDate = parseDate(endDateStr);
-                } catch (error: any) {
-                    console.error("Error parsing dates:", error);
-                    res.status(400).json({
-                        error: 'Invalid date format',
-                        response: "I couldn't understand the dates in your request. Please try again with clearer date information.",
-                        details: error.message
-                    });
-                    return;
-                }
-
-                try {
-                    // Try to use service account auth first, fall back to OAuth client
-                    let auth;
-                    try {
-                        auth = createServiceAuthClient();
-                        console.log("Using service account authentication for calendar access");
-                    } catch (serviceAuthError: unknown) {
-                        try {
-                            auth = createAuthClient();
-                            console.log("Using OAuth authentication for calendar access");
-                        } catch (oauthError: unknown) {
-                            res.status(401).json({
-                                error: 'Authentication failed. Please set up Google Calendar authentication.',
-                                details: oauthError instanceof Error ? oauthError.message : "Unknown error"
-                            });
-                            return;
-                        }
+// MCP Manifest schema
+const mcpManifest = {
+    schemaVersion: '1.0',
+    name: 'calendar-copilot',
+    description: 'Google Calendar tools for event management',
+    contact: {
+        name: 'Calendar Copilot'
+    },
+    auth: {
+        type: 'none' // Since the server handles authentication internally
+    },
+    tools: [
+        {
+            name: 'get-events-range',
+            description: 'Retrieves calendar events within a specified date range',
+            inputSchema: getEventsRangeParamsSchema,
+            examples: [
+                {
+                    input: {
+                        startDate: 'today',
+                        endDate: 'tomorrow'
+                    },
+                    output: {
+                        events: [
+                            {
+                                summary: 'Team Meeting',
+                                start: { dateTime: '2023-04-25T10:00:00Z' },
+                                end: { dateTime: '2023-04-25T11:00:00Z' }
+                            }
+                        ]
                     }
-
-                    const calendar = google.calendar({ version: 'v3', auth });
-
-                    // Ensure the dates are the start and end of the day
-                    const timeMin = startOfDay(startDate).toISOString();
-                    const timeMax = endOfDay(endDate).toISOString();
-
-                    console.log(`Fetching events from calendar: ${calendarId} between ${timeMin} and ${timeMax}`);
-
-                    // Get events
-                    const response = await calendar.events.list({
-                        calendarId,
-                        timeMin,
-                        timeMax,
-                        singleEvents: true,
-                        orderBy: 'startTime',
-                        maxResults: 10,
-                    });
-
-                    const events = response.data.items || [];
-
-                    // Generate a human-friendly response with OpenAI
-                    const humanResponse = await generateCalendarQueryResponse(
-                        events,
-                        prompt,
-                        format(startDate, 'PPP'),
-                        format(endDate, 'PPP')
-                    );
-
-                    res.json({
-                        response: humanResponse,
-                        calendarQueried: true,
-                        events
-                    });
-
-                } catch (error: any) {
-                    console.error('Error fetching events:', error);
-
-                    // Send a mock response in case of error
-                    const mockEvents = [
-                        {
-                            summary: "Mock Team Meeting",
-                            start: { dateTime: addHours(new Date(), 3).toISOString() },
-                            end: { dateTime: addHours(new Date(), 4).toISOString() }
-                        },
-                        {
-                            summary: "Mock Client Call",
-                            start: { dateTime: addHours(addDays(new Date(), 1), 10).toISOString() },
-                            end: { dateTime: addHours(addDays(new Date(), 1), 11).toISOString() }
-                        }
-                    ];
-
-                    // Generate a message for mock data
-                    const mockResponse = await generateCalendarQueryResponse(
-                        mockEvents,
-                        prompt,
-                        format(new Date(), 'PPP'),
-                        format(addDays(new Date(), 7), 'PPP')
-                    );
-
-                    res.json({
-                        response: mockResponse + " (Note: Using mock data as the calendar connection failed)",
-                        calendarQueried: true,
-                        mockData: true,
-                        events: mockEvents,
-                        error: error.message
-                    });
                 }
-            }
-            else if (intent.intent === 'create_event') {
-                const { title, datetime: datetimeStr, duration } = intent.eventDetails;
-
-                try {
-                    // Try to use service account auth first, fall back to OAuth client
-                    let auth;
-                    try {
-                        auth = createServiceAuthClient();
-                        console.log("Using service account authentication for calendar access");
-                    } catch (serviceAuthError: unknown) {
-                        try {
-                            auth = createAuthClient();
-                            console.log("Using OAuth authentication for calendar access");
-                        } catch (oauthError: unknown) {
-                            res.status(401).json({
-                                error: 'Authentication failed. Please set up Google Calendar authentication.',
-                                details: oauthError instanceof Error ? oauthError.message : "Unknown error"
-                            });
-                            return;
-                        }
-                    }
-
-                    const calendar = google.calendar({ version: 'v3', auth });
-
-                    console.log(`Datetime string: ${datetimeStr}`);
-                    // Parse start time
-                    let startTime;
-                    try {
-                        startTime = parseDate(datetimeStr);
-                    } catch (error) {
-                        res.status(400).json({
-                            error: `Invalid datetime format: ${datetimeStr}`,
-                            response: "I couldn't understand the date and time for your event. Please specify when you want to schedule it more clearly."
-                        });
-                        return;
-                    }
-
-                    // Calculate end time
-                    const endTime = addMinutes(startTime, duration);
-
-                    // Create event
-                    const event = {
-                        summary: title,
-                        start: {
-                            dateTime: startTime.toISOString(),
-                        },
-                        end: {
-                            dateTime: endTime.toISOString(),
-                        },
-                    };
-
-                    console.log(`Creating event "${title}" in calendar: ${calendarId}`);
-
-                    const response = await calendar.events.insert({
-                        calendarId,
-                        requestBody: event,
-                    });
-
-                    console.log(`Response from Google Calendar create event: ${JSON.stringify(response.data)}`);
-
-                    if (!response.data) {
-                        throw new Error("Failed to create event");
-                    }
-
-                    // Generate a human-friendly response with OpenAI
-                    const humanResponse = await generateEventCreationResponse(
-                        response.data,
-                        prompt
-                    );
-
-                    res.json({
-                        response: humanResponse,
-                        eventCreated: true,
+            ]
+        },
+        {
+            name: 'create-event',
+            description: 'Creates a new calendar event',
+            inputSchema: createEventParamsSchema,
+            examples: [
+                {
+                    input: {
+                        title: 'Coffee with Alice',
+                        datetime: '2023-04-26T15:00:00',
+                        duration: 30,
+                        attendees: ['alice@example.com']
+                    },
+                    output: {
+                        success: true,
                         event: {
-                            id: response.data.id,
-                            summary: response.data.summary,
-                            description: response.data.description,
-                            start: response.data.start,
-                            end: response.data.end,
-                            location: response.data.location,
-                            htmlLink: response.data.htmlLink
+                            summary: 'Coffee with Alice',
+                            start: { dateTime: '2023-04-26T15:00:00Z' },
+                            end: { dateTime: '2023-04-26T15:30:00Z' },
+                            attendees: [{ email: 'alice@example.com' }]
                         }
-                    });
-
-                } catch (error: any) {
-                    console.error('Error creating event:', error);
-
-                    // Create mock event for response
-                    const mockEvent = {
-                        summary: title,
-                        start: { dateTime: parseDate(datetimeStr).toISOString() },
-                        end: { dateTime: addMinutes(parseDate(datetimeStr), duration).toISOString() },
-                    };
-
-                    // Generate a message for mock data
-                    const mockResponse = await generateEventCreationResponse(
-                        mockEvent,
-                        prompt
-                    );
-
-                    res.json({
-                        response: mockResponse + " (Note: This is a mock event as the calendar connection failed)",
-                        eventCreated: true,
-                        mockData: true,
-                        event: mockEvent,
-                        error: error.message
-                    });
+                    }
                 }
-            }
-            else {
-                // Handle unknown intent
-                res.json({
-                    response: intent.description || "I'm not sure what you're asking about your calendar. You can try asking about your upcoming events or create a new event.",
-                    intent: 'unknown'
-                });
-            }
-        } catch (error: any) {
-            console.error('Error processing natural language query:', error);
-            res.status(500).json({
-                success: false,
-                error: 'Failed to process your request',
-                details: error.message || 'Unknown error',
-                response: "Sorry, I couldn't process that request. Please try again with clearer instructions about your calendar."
+            ]
+        }
+    ]
+};
+
+// MCP Protocol handlers
+// 1. Get manifest
+const getManifestHandler: RequestHandler = (req, res) => {
+    res.json(mcpManifest);
+};
+
+// 2. Tool execution handler
+interface MCPRequest {
+    name: string;
+    input: any;
+}
+
+// Handle get-events-range tool
+const getEventsRangeHandler = async (input: any) => {
+    try {
+        // Validate input
+        const { startDate, endDate, calendarId = 'primary' } = getEventsRangeParamsSchema.parse(input);
+
+        // Execute the calendar function
+        const events = await executeGetEventsRange(startDate, endDate, calendarId);
+
+        // Return formatted response
+        return {
+            events
+        };
+    } catch (error: any) {
+        console.error('[MCP:get-events-range] Error:', error);
+        throw new Error(`Failed to get events: ${error.message}`);
+    }
+};
+
+// Handle create-event tool
+const createEventHandler = async (input: any) => {
+    try {
+        // Validate input
+        const { title, datetime, duration, attendees = [], calendarId = 'primary' } = createEventParamsSchema.parse(input);
+
+        // Execute the calendar function
+        const event = await executeCreateEvent(title, datetime, duration, attendees, calendarId);
+
+        // Return formatted response
+        return {
+            success: true,
+            event
+        };
+    } catch (error: any) {
+        console.error('[MCP:create-event] Error:', error);
+        throw new Error(`Failed to create event: ${error.message}`);
+    }
+};
+
+// Main tool execution endpoint for MCP
+const executeToolHandler: RequestHandler = async (req, res) => {
+    try {
+        const mcpRequest = req.body as MCPRequest;
+
+        if (!mcpRequest.name) {
+            return res.status(400).json({
+                error: 'Invalid request: tool name is required'
             });
         }
-    })();
+
+        console.log(`[MCP] Executing tool: ${mcpRequest.name}`);
+
+        let result;
+
+        // Route to the appropriate tool implementation
+        switch (mcpRequest.name) {
+            case 'get-events-range':
+                result = await getEventsRangeHandler(mcpRequest.input);
+                break;
+
+            case 'create-event':
+                result = await createEventHandler(mcpRequest.input);
+                break;
+
+            default:
+                return res.status(400).json({
+                    error: `Unknown tool: ${mcpRequest.name}`
+                });
+        }
+
+        // Return the result
+        return res.json(result);
+
+    } catch (error: any) {
+        console.error('[MCP:execute] Error:', error);
+        return res.status(500).json({
+            error: error.message || 'Internal server error'
+        });
+    }
 };
 
-// Test endpoint
-const testHandler: RequestHandler = (req, res) => {
-    console.log("Test endpoint called with method:", req.method);
-    console.log("Test endpoint request body:", req.body);
+// List available tools endpoint (simplified version of manifest)
+const listToolsHandler: RequestHandler = (req, res) => {
+    const tools = mcpManifest.tools.map(tool => ({
+        name: tool.name,
+        description: tool.description
+    }));
 
+    res.json({ tools });
+};
+
+// Test endpoint for connectivity checks
+const testHandler: RequestHandler = (req, res) => {
     res.json({
         success: true,
-        message: "Test endpoint is working",
-        method: req.method,
-        receivedData: req.body
+        message: "Calendar Copilot MCP Server is running",
+        tools: mcpManifest.tools.map(t => t.name)
     });
 };
 
-// Add global error handler middleware
-const errorHandler = (err: any, req: Request, res: Response, next: any) => {
-    console.error('Global error handler caught:', err);
-    res.status(500).json({
-        success: false,
-        error: 'Internal server error',
-        message: err.message || 'Unknown error'
-    });
-};
-
-// Register routes
-router.get('/calendar/events', getEventsHandler);
-router.post('/calendar/create', createEventHandler);
-router.post('/auth/set-tokens', setTokensHandler);
-router.get('/auth/google', googleAuthHandler);
-router.get('/auth/callback', googleAuthCallbackHandler);
-router.get('/auth/status', authStatusHandler);
-router.post('/calendar/query', queryHandler);
+// Register MCP Protocol routes
+router.get('/manifest', getManifestHandler);
+router.post('/execute', executeToolHandler);
+router.get('/tools', listToolsHandler);
+router.get('/test', testHandler);
 router.post('/test', testHandler);
-router.get('/test', testHandler); // Add GET support for easier testing
 
 // Register router with prefix
 app.use('/api', router);
 
-// Add the error handler after all other middleware and routes
-app.use(errorHandler);
-
 // Add a default 404 handler
 app.use((req, res) => {
-    console.log(`404 Not Found: ${req.method} ${req.originalUrl}`);
-    res.status(404).json({
+    res.status(404).json({ success: false, error: 'Not Found' });
+});
+
+// Add global error handler middleware
+app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
+    console.error('[Global Error] Caught:', err);
+    const statusCode = err.status || 500;
+    res.status(statusCode).json({
         success: false,
-        error: 'Not Found',
-        message: `Endpoint not found: ${req.method} ${req.originalUrl}`
+        error: err.message || 'Internal server error',
     });
 });
 
 // Start server
 const PORT = process.env.PORT || 3100;
 app.listen(PORT, () => {
-    console.log(`Calendar Copilot API server running on port ${PORT}`);
-    console.log(`Service Account configured: ${!!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL}`);
-    console.log(`OAuth credentials configured: ${!!(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)}`);
+    console.log(`🚀 Calendar Copilot MCP Server running on port ${PORT}`);
+    console.log(`📄 MCP Manifest available at http://localhost:${PORT}/api/manifest`);
+    console.log(`🔧 MCP Tools available at http://localhost:${PORT}/api/tools`);
+
+    console.log('\n🧩 Exposed MCP Tools:');
+    mcpManifest.tools.forEach(tool => {
+        console.log(`- ${tool.name}: ${tool.description}`);
+    });
+
+    // Log environment configuration
+    console.log('\n⚙️ Environment:');
+    console.log(`- MOCK_MODE: ${process.env.MOCK_MODE === 'true' ? 'Enabled' : 'Disabled'}`);
+    console.log(`- Service Account: ${!!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? 'Configured' : 'Not configured'}`);
 }); 

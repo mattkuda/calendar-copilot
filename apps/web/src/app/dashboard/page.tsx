@@ -1,7 +1,7 @@
 "use client"
 
 import Link from "next/link"
-import { CalendarRange, ChevronLeft, Send } from "lucide-react"
+import { CalendarRange, ChevronLeft, Send, ChevronDown } from "lucide-react"
 import { UserButton, useUser, useAuth, useClerk, useSession } from "@clerk/nextjs"
 import { useEffect, useState } from "react"
 import { formatISO, add, format } from "date-fns"
@@ -13,6 +13,8 @@ import { CalendarModal } from "@/components/calendar/CalendarModal"
 import { CalendarWidget } from "@/components/calendar/CalendarWidget"
 // Import types
 import { CalendarEventType } from "@/types/calendar"
+import ReactMarkdown from 'react-markdown'
+import remarkGfm from 'remark-gfm'
 
 // Define a basic type for calendar events
 interface CalendarEvent {
@@ -80,7 +82,7 @@ export default function DashboardPage() {
     // Handle sending prompt to MCP
     const handleSendPrompt = async () => {
         if (!prompt.trim()) return;
-        console.log("Sending prompt to MCP:", prompt);
+        console.log("Sending prompt to Calendar Copilot:", prompt);
 
         try {
             setIsSending(true);
@@ -89,8 +91,8 @@ export default function DashboardPage() {
             // Get authentication tokens/headers
             const headers = await getOAuthTokens();
 
-            // Send the prompt to our API query endpoint, which will forward to MCP server
-            const response = await fetch("/api/query", {
+            // Send the prompt to our new OpenAI calendar agent API endpoint
+            const response = await fetch("/api/openai-calendar-agent", {
                 method: "POST",
                 headers: {
                     ...headers,
@@ -103,29 +105,29 @@ export default function DashboardPage() {
             });
 
             if (!response.ok) {
-                throw new Error(`API responded with status: ${response.status}`);
+                const data = await response.json();
+                throw new Error(data.response || data.error || `API responded with status: ${response.status}`);
             }
 
             const data = await response.json();
 
-            // Handle the MCP server response
+            // Handle the response
             if (data.response) {
                 setMcpResponse(data.response);
             } else if (data.error) {
                 setMcpResponse(`Error: ${data.error}`);
             } else {
-                setMcpResponse("Received response from MCP server, but no message was found.");
+                setMcpResponse("Received response, but no message was found.");
             }
 
-            // If the response indicates an event was created or calendar was queried,
-            // refresh the events list
-            if (data.eventCreated || data.calendarQueried) {
+            // If the intent indicates we should refresh the calendar
+            if (data.intent === 'get_events' || data.intent === 'create_event') {
                 fetchCalendarEvents();
             }
 
         } catch (error) {
             console.error("Error sending prompt:", error);
-            setMcpResponse("Sorry, there was an error processing your request.");
+            setMcpResponse(error instanceof Error ? error.message : "Sorry, there was an error processing your request.");
         } finally {
             setIsSending(false);
         }
@@ -402,8 +404,10 @@ export default function DashboardPage() {
                             ) : mcpResponse ? (
                                 <div className="whitespace-pre-wrap text-sm">
                                     <p className="text-xs text-muted-foreground mb-2">Calendar Copilot's response:</p>
-                                    <div className="p-3 bg-card rounded-md shadow-sm border">
-                                        {mcpResponse}
+                                    <div className="p-3 bg-card rounded-md shadow-sm border prose prose-sm max-w-none dark:prose-invert">
+                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                            {mcpResponse}
+                                        </ReactMarkdown>
                                     </div>
                                 </div>
                             ) : (
@@ -420,9 +424,9 @@ export default function DashboardPage() {
                         </div>
 
                         {/* Input Section */}
-                        <div className="p-4 flex gap-2">
-                            <input
-                                type="text"
+                        <div className="p-4 flex gap-2 relative">
+                            <textarea
+                                rows={3}
                                 value={prompt}
                                 onChange={(e) => setPrompt(e.target.value)}
                                 placeholder="e.g., What meetings do I have tomorrow?"
@@ -432,7 +436,7 @@ export default function DashboardPage() {
                             />
                             <button
                                 onClick={handleSendPrompt}
-                                className="inline-flex items-center justify-center rounded-md bg-primary px-3 py-2 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
+                                className="inline-flex items-center justify-center rounded-md bg-primary h-[38px] w-[100px] px-3 py-2 text-sm font-medium text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
                                 disabled={isSending || !prompt.trim() || !savedCalendarId}
                             >
                                 {isSending ? (
@@ -444,6 +448,32 @@ export default function DashboardPage() {
                                     </>
                                 )}
                             </button>
+
+                            {/* Example prompts dropdown */}
+                            <div className="absolute right-[108px] bottom-[24px] z-10">
+                                <div className="relative inline-block w-min-content">
+                                    <select
+                                        onChange={(e) => {
+                                            if (e.target.value) {
+                                                setPrompt(e.target.value);
+                                                e.target.value = '';
+                                            }
+                                        }}
+                                        className="h-7 w-[168px] appearance-none pl-3 pr-8 py-1 text-xs text-muted-foreground bg-transparent hover:bg-accent/30 focus:bg-accent/30 rounded-md cursor-pointer focus:outline-none"
+                                        defaultValue=""
+                                        aria-label="Sample prompts"
+                                    >
+                                        <option value="" disabled>More sample prompts</option>
+                                        <option value="What meetings do I have this week?">Show this week's meetings</option>
+                                        <option value="Do I have any meetings tomorrow?">Check tomorrow's meetings</option>
+                                        <option value="Schedule a team meeting titled Weekly Sync for next Monday at 10am for 1 hour">Schedule team meeting</option>
+                                        <option value="Create a 30-minute call with Sarah tomorrow afternoon">Create call with Sarah</option>
+                                    </select>
+                                    <div className="absolute inset-y-0 right-1.5 flex items-center pointer-events-none">
+                                        <ChevronDown className="h-3 w-3 opacity-70" />
+                                    </div>
+                                </div>
+                            </div>
                         </div>
 
                         {!savedCalendarId && (
@@ -464,33 +494,6 @@ export default function DashboardPage() {
                                 toast.info(`Selected date: ${format(date, 'PP')}`)
                             }}
                         />
-                    </div>
-
-                    <div className="rounded-lg border bg-card text-card-foreground shadow-sm p-6">
-                        <h2 className="text-xl font-semibold mb-4">Example Prompts</h2>
-                        <div className="space-y-2">
-                            <p className="text-sm text-muted-foreground mb-2">
-                                Try asking Calendar Copilot:
-                            </p>
-                            <ul className="text-sm space-y-2">
-                                <li onClick={() => setPrompt("What meetings do I have this week?")}
-                                    className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
-                                    "What meetings do I have this week?"
-                                </li>
-                                <li onClick={() => setPrompt("Do I have any meetings tomorrow?")}
-                                    className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
-                                    "Do I have any meetings tomorrow?"
-                                </li>
-                                <li onClick={() => setPrompt("Schedule a team meeting titled Weekly Sync for next Monday at 10am for 1 hour")}
-                                    className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
-                                    "Schedule a team meeting titled Weekly Sync for next Monday at 10am for 1 hour"
-                                </li>
-                                <li onClick={() => setPrompt("Create a 30-minute call with Sarah tomorrow afternoon")}
-                                    className="p-2 bg-muted rounded-md cursor-pointer hover:bg-muted/80">
-                                    "Create a 30-minute call with Sarah tomorrow afternoon"
-                                </li>
-                            </ul>
-                        </div>
                     </div>
                     <button
                         onClick={() => signOut()}

@@ -2,75 +2,67 @@ PRD
 Title: Calendar Copilot (MCP-integrated AI calendar assistant)
 
 Overview:
-A full-stack app that allows users to connect their Google Calendar, then query or modify their calendar using natural language through an LLM (OpenAI) via Claude for Desktop using MCP.
+A full-stack app demonstrating the Model Context Protocol (MCP). It allows users to connect Google Calendar and interact with it using natural language via:
+1. A Next.js frontend/API using OpenAI, acting as an MCP client to call tools from a local MCP server.
+2. Claude for Desktop, connecting directly to the same local MCP server.
 
 Goals:
 
-Let users ask natural language questions like:
-
-"How many meetings do I have next week?"
-
-"What's on my calendar tomorrow?"
-
-Let users create calendar events:
-
-"Schedule a 30-minute meeting with Joe next Tuesday at 1pm CST."
+Demonstrate MCP integration patterns.
+Let users ask natural language questions like "What's on my calendar tomorrow?"
+Let users create calendar events like "Schedule a 30-minute meeting with Joe next Tuesday at 1pm CST."
+Showcase a reusable MCP server providing specific tools.
 
 Features:
 
-Authentication & Calendar Linking (Frontend/Backend):
+Authentication & Calendar Linking (Frontend):
+- Clerk authentication for user sign-in.
+- Mechanism for users to provide their Google Calendar ID (requires manual sharing with service account).
 
-Service account flow to connect Google Calendar
+MCP Server (`apps/mcp-server`):
+- Implements the MCP protocol.
+- Exposes two tools via MCP manifest:
+  - `get-events-range({ startDate, endDate })`
+  - `create-event({ title, datetime, duration, attendees })`
+- Contains *no* LLM logic; purely executes tools.
+- Calls Google Calendar API using a Service Account to fulfill tool requests.
+- Compatible with connection from Claude for Desktop.
 
-MCP Server (Node CLI):
-
-Exposes two tools:
-
-get-events-range({ startDate, endDate })
-
-create-event({ title, datetime, duration, attendees })
-
-Calls Google Calendar API to fulfill requests
-
-Claude for Desktop Integration:
-
-Configured to spawn the MCP server from local machine
-
-Accessible tools inside Claude's UI
-
-Frontend UI (Next.js + shadcn):
-
-Landing page with:
-
-Calendar connect button
-
-Simple dashboard showing upcoming events (for testing)
-
-Instructions to use Claude and test prompts
+Next.js App (`apps/web`):
+- Frontend UI (shadcn) for dashboard display and interacting with the API.
+- Displays upcoming events fetched directly (or via API).
+- Provides an input for natural language calendar queries/commands.
+- API Route (`/api/openai-calendar-agent`):
+  - Acts as an **MCP client**, connecting to the local `apps/mcp-server`.
+  - Uses `listTools` to get available tools from the MCP server.
+  - Orchestrates interaction with the **OpenAI LLM**:
+    - Sends prompts and tool definitions to OpenAI.
+    - Handles tool call requests from OpenAI.
+    - Uses the MCP client's `callTool` to execute requests on the `apps/mcp-server`.
+    - Formats results from MCP server back to OpenAI.
+    - Returns the final LLM response to the frontend.
+- API Route (`api/calendar/events`): For display the live calendar in the app.
 
 Non-Goals (for MVP):
 
-No multi-user auth
-
-No persistent storage
-
-No calendar event editing or deleting
+- No OAuth flow for calendar linking (relies on service account + user sharing).
+- No persistent storage beyond environment variables/local storage for calendar ID.
+- No calendar event editing or deleting via MCP tools.
 
 Tech Stack:
 
-Frontend: Next.js (App Router), TypeScript, TailwindCSS, shadcn/ui
+- Frontend: Next.js (App Router), TypeScript, TailwindCSS, shadcn/ui, Clerk
+- Backend API: Next.js API routes (acting as OpenAI orchestrator + MCP Client)
+- MCP server: Node.js CLI w/ TypeScript (implementing MCP Server protocol + Google Calendar logic)
+- MCP Client/Server Libraries: Appropriate Node.js libraries for MCP protocol implementation.
+- LLM: OpenAI (used via Next.js API)
+- Google Integration: Google Calendar API via Service Account
 
-Backend: Next.js API routes (for Google API proxy)
-
-MCP server: Node.js CLI w/ TypeScript and MCP SDK
-
-LLM: OpenAI (natural language understanding)
-
-Suggested structure 
+Suggested structure
 /calendar-copilot
 ├── apps/
-│   ├── web/           → Next.js + shadcn UI app
-│   └── mcp-server/    → Node CLI MCP server
+│   ├── web/           → Next.js app (UI + API/MCP Client/OpenAI Orchestrator)
+│   └── mcp-server/    → Node CLI MCP server (MCP Protocol + Tool Executor)
 ├── packages/
 │   └── shared/        → Google Calendar SDK logic, Zod schemas, utils
 ├── .gitignore

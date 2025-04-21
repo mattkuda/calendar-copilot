@@ -1,180 +1,142 @@
 import { google } from 'googleapis';
 import { parseISO, addMinutes, format, startOfDay, endOfDay, addDays } from 'date-fns';
 
-// Mock tokens - in a production app, store securely
-// In MVP, tokens would be passed from the frontend after OAuth flow
-let accessToken = '';
-let refreshToken = '';
+// Create service account auth client
+const createServiceAuthClient = () => {
+    const serviceAccountPrivateKey = process.env.GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY?.replace(/\\n/g, '\n');
+    const serviceAccountEmail = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL;
 
-// Create OAuth2 client
-const createAuthClient = () => {
-    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
-        throw new Error('Missing Google API credentials');
+    if (!serviceAccountPrivateKey || !serviceAccountEmail) {
+        throw new Error('Missing Google service account credentials. Please set GOOGLE_SERVICE_ACCOUNT_EMAIL and GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY in your .env file.');
     }
 
-    const client = new google.auth.OAuth2(
-        process.env.GOOGLE_CLIENT_ID,
-        process.env.GOOGLE_CLIENT_SECRET,
-        process.env.REDIRECT_URI || 'http://localhost:3000/api/auth/callback/google'
-    );
-
-    // Set tokens (for MVP - in production these would be retrieved from secure storage)
-    if (accessToken && refreshToken) {
-        client.setCredentials({
-            access_token: accessToken,
-            refresh_token: refreshToken,
-        });
-    } else {
-        throw new Error('No Google Calendar authorization. Please connect your calendar first.');
-    }
-
-    return client;
+    return new google.auth.JWT({
+        email: serviceAccountEmail,
+        key: serviceAccountPrivateKey,
+        scopes: [
+            'https://www.googleapis.com/auth/calendar',
+            'https://www.googleapis.com/auth/calendar.events'
+        ]
+    });
 };
 
-// Parse natural language dates
+// Parse natural language or ISO dates (can be moved to shared utils if preferred)
 const parseDate = (dateStr: string): Date => {
-    // Handle natural language dates
-    if (dateStr.toLowerCase() === 'today') {
-        return new Date();
-    } else if (dateStr.toLowerCase() === 'tomorrow') {
-        return addDays(new Date(), 1);
-    } else if (dateStr.toLowerCase() === 'next week') {
-        return addDays(new Date(), 7);
-    } else if (dateStr.toLowerCase().includes('next')) {
-        // Handle "next monday", "next tuesday", etc.
-        const dayMap: Record<string, number> = {
-            sunday: 0,
-            monday: 1,
-            tuesday: 2,
-            wednesday: 3,
-            thursday: 4,
-            friday: 5,
-            saturday: 6,
-        };
-
-        const dayName = dateStr.toLowerCase().replace('next ', '');
-        const targetDay = dayMap[dayName];
-
-        if (targetDay !== undefined) {
-            const today = new Date();
-            const currentDay = today.getDay();
-            const daysUntilTarget = (targetDay - currentDay + 7) % 7;
-            return addDays(today, daysUntilTarget === 0 ? 7 : daysUntilTarget);
-        }
+    if (!dateStr) {
+        throw new Error('Empty date string provided');
     }
+    const normalizedStr = dateStr.trim().toLowerCase();
+    if (normalizedStr === 'today') return new Date();
+    if (normalizedStr === 'tomorrow') return addDays(new Date(), 1);
+    if (normalizedStr === 'next week') return addDays(new Date(), 7);
+    // Add more natural language parsing if needed...
 
-    // Try to parse as ISO date
     try {
-        return parseISO(dateStr);
+        const parsed = parseISO(dateStr);
+        if (isNaN(parsed.getTime())) {
+            throw new Error(`Invalid date value from parseISO: ${dateStr}`);
+        }
+        return parsed;
     } catch (error) {
-        throw new Error(`Invalid date format: ${dateStr}`);
+        throw new Error(`Could not parse date: "${dateStr}". Ensure format is ISO (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS).`);
     }
 };
 
-// Get events for a date range
-export const getEvents = async (startDateStr: string, endDateStr: string) => {
+/**
+ * Executes the logic to get events for a date range using Service Account.
+ * @param startDateStr Start date string (ISO or natural language)
+ * @param endDateStr End date string (ISO or natural language)
+ * @param calendarId Google Calendar ID (defaults to 'primary')
+ * @returns Promise<Array<CalendarEvent>>
+ */
+export const executeGetEventsRange = async (startDateStr: string, endDateStr: string, calendarId: string = 'primary') => {
     try {
-        const auth = createAuthClient();
+        const auth = createServiceAuthClient();
         const calendar = google.calendar({ version: 'v3', auth });
 
-        // Parse dates
         const startDate = parseDate(startDateStr);
         const endDate = parseDate(endDateStr);
 
-        // Ensure the dates are the start and end of the day
         const timeMin = startOfDay(startDate).toISOString();
         const timeMax = endOfDay(endDate).toISOString();
 
-        // Get events
+        console.log(`[GoogleCalendar] Fetching events from calendar: ${calendarId} between ${timeMin} and ${timeMax}`);
+
         const response = await calendar.events.list({
-            calendarId: 'primary',
+            calendarId: calendarId,
             timeMin,
             timeMax,
             singleEvents: true,
             orderBy: 'startTime',
+            maxResults: 100, // Limit results
         });
 
-        // Format events for better readability
-        const formattedEvents = (response.data.items || []).map(event => {
-            return {
-                id: event.id,
-                summary: event.summary,
-                description: event.description,
-                start: event.start,
-                end: event.end,
-                location: event.location,
-                attendees: event.attendees,
-                htmlLink: event.htmlLink
-            };
-        });
+        console.log(`[GoogleCalendar] Successfully fetched ${response.data.items?.length || 0} events`);
+        return response.data.items || [];
 
-        return formattedEvents;
-    } catch (error) {
-        console.error('Error fetching events:', error);
-        throw error;
+    } catch (error: any) {
+        console.error('[GoogleCalendar] Error fetching events:', error);
+        // Re-throw a more specific error or handle it
+        throw new Error(`Failed to fetch Google Calendar events: ${error.message}`);
     }
 };
 
-// Create a new event
-export const createEvent = async (
+/**
+ * Executes the logic to create a new event using Service Account.
+ * @param title Event title
+ * @param datetimeStr Event start datetime string (ISO or natural language)
+ * @param durationMinutes Event duration in minutes
+ * @param attendees List of attendee emails (optional)
+ * @param calendarId Google Calendar ID (defaults to 'primary')
+ * @returns Promise<CalendarEvent>
+ */
+export const executeCreateEvent = async (
     title: string,
     datetimeStr: string,
     durationMinutes: number,
-    attendees: string[] = []
+    attendees: string[] = [],
+    calendarId: string = 'primary'
 ) => {
     try {
-        const auth = createAuthClient();
+        const auth = createServiceAuthClient();
         const calendar = google.calendar({ version: 'v3', auth });
 
-        // Parse start time
         let startTime: Date;
         try {
             startTime = parseDate(datetimeStr);
-        } catch (error) {
-            throw new Error(`Invalid datetime format: ${datetimeStr}`);
+        } catch (error: any) {
+            throw new Error(`Invalid datetime format: ${datetimeStr}. ${error.message}`);
         }
 
-        // Calculate end time
         const endTime = addMinutes(startTime, durationMinutes);
-
-        // Format attendees
         const formattedAttendees = attendees.map(email => ({ email }));
 
-        // Create event
         const event = {
             summary: title,
             start: {
                 dateTime: startTime.toISOString(),
+                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, // Use system timezone
             },
             end: {
                 dateTime: endTime.toISOString(),
+                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
             },
             attendees: formattedAttendees,
         };
 
+        console.log(`[GoogleCalendar] Creating event "${title}" in calendar: ${calendarId}`);
+
         const response = await calendar.events.insert({
-            calendarId: 'primary',
+            calendarId: calendarId,
             requestBody: event,
+            sendUpdates: attendees.length > 0 ? 'all' : 'none',
         });
 
-        return {
-            id: response.data.id,
-            summary: response.data.summary,
-            description: response.data.description,
-            start: response.data.start,
-            end: response.data.end,
-            location: response.data.location,
-            attendees: response.data.attendees,
-            htmlLink: response.data.htmlLink
-        };
-    } catch (error) {
-        console.error('Error creating event:', error);
-        throw error;
-    }
-};
+        console.log(`[GoogleCalendar] Event created successfully: ${response.data.htmlLink}`);
+        return response.data; // Return the created event object
 
-// Set tokens (this would be called after OAuth flow in the web app)
-export const setTokens = (newAccessToken: string, newRefreshToken: string) => {
-    accessToken = newAccessToken;
-    refreshToken = newRefreshToken;
+    } catch (error: any) {
+        console.error('[GoogleCalendar] Error creating event:', error);
+        throw new Error(`Failed to create Google Calendar event: ${error.message}`);
+    }
 }; 

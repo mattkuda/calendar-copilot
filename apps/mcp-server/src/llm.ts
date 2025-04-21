@@ -107,7 +107,7 @@ If the user's request is unclear or doesn't fit these intents, use 'unknown'. Pr
                 }
             ],
             response_format: zodResponseFormat(ResponseSchema, "calendarIntent"),
-            temperature: 0.1
+            temperature: 0.1,
         });
 
         console.log("OpenAI processed response:", JSON.stringify(response.choices[0].message.parsed, null, 2));
