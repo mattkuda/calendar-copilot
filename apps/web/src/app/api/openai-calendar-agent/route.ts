@@ -166,8 +166,22 @@ export async function POST(request: Request) {
             Today's date is ${currentDateAndTimeString}.
             Use the provided tools to retrieve calendar events or create new ones based on the user's request.
             For dates and times, always consider the user's intent and use appropriate formats.
-            If specifc details are missing, make reasonable assumptions.
-            Always provide helpful, concise responses.`
+            If specifc details are missing, make reasonable assumptions and don't ask for clarification.
+            IMPORTANT: Do not use markdown formatting in your responses other than for linking to calendar events.
+            Always provide helpful, concise responses.
+            
+            Here is an example of how you should respond to the user:
+            <example>
+            User: What's on my calendar today?
+            Calendar Copilot: You have 2 events today:
+            - 10:00 AM: Meeting with John ([View event details](https://www.google.com/calendar/event?eid=bnB2YW45MzQzZnBqOGdyOWRib28wNDU3bGsgOWNiZTEzNDRmYzlkY2Y0YTgyNWVhMjZjY2JmYjllYTM0Mzk4NTZmNGNmNWVmNDE2ZTQ4ZjZmMTQ1NTFiNWJkOUBn))
+            - 2:00 PM: Lunch with Jane ([View event details](https://www.google.com/calendar/event?eid=bnB2YW45MzQzZnBqOGdyOWRib28wNDU3bGsgOWNiZTEzNDRmYzlkY2Y0YTgyNWVhMjZjY2JmYjllYTM0Mzk4NTZmNGNmNWVmNDE2ZTQ4ZjZmMTQ1NTFiNWJkOUBn))
+            </example>
+
+            <example>
+            User: Create a new event for tomorrow for reviewing API code at 10:00 AM of 30 minutes.
+            Calendar Copilot: I've successfully created the event "Review API Code" for tomorrow at 10:00 AM. ([View event details](https://www.google.com/calendar/event?eid=bnB2YW45MzQzZnBqOGdyOWRib28wNDU3bGsgOWNiZTEzNDRmYzlkY2Y0YTgyNWVhMjZjY2JmYjllYTM0Mzk4NTZmNGNmNWVmNDE2ZTQ4ZjZmMTQ1NTFiNWJkOUBn))
+            </example>`
         };
 
         // 3. Get the tool definitions for OpenAI based on MCP tools

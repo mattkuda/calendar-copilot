@@ -404,10 +404,21 @@ export default function DashboardPage() {
                             ) : mcpResponse ? (
                                 <div className="whitespace-pre-wrap text-sm">
                                     <p className="text-xs text-muted-foreground mb-2">Calendar Copilot's response:</p>
-                                    <div className="p-3 bg-card rounded-md shadow-sm border prose prose-sm max-w-none dark:prose-invert">
-                                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                                            {mcpResponse}
-                                        </ReactMarkdown>
+                                    <div className="p-3 bg-card rounded-md shadow-sm border">
+                                        <div className="prose prose-sm max-w-none dark:prose-invert 
+                                            [&_p]:!text-foreground [&_li]:!text-foreground
+                                            [&_ul]:!mt-0 [&_ol]:!mt-0 [&_ul]:!mb-0 [&_ol]:!mb-0
+                                            [&_li]:!my-0
+                                            [&_li>ul]:!mt-0 [&_li>ul]:!mb-0
+                                            [&_p]:!my-2
+                                            [&_ul]:!pl-4 [&_ol]:!pl-4
+                                            [&_li]:marker:!text-foreground
+                                            [&_a]:!text-primary hover:[&_a]:!text-primary/80
+                                            [&_strong]:!font-semibold">
+                                            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                                                {mcpResponse}
+                                            </ReactMarkdown>
+                                        </div>
                                     </div>
                                 </div>
                             ) : (
