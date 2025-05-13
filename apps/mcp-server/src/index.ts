@@ -4,7 +4,7 @@ import express, { Request, Response, Router, RequestHandler } from 'express';
 import path from 'path';
 import cors from 'cors';
 import { z } from 'zod';
-import { executeGetEventsRange, executeCreateEvent } from './googleCalendar';
+import { executeGetEventsRange, executeCreateEvent } from './googleCalendar.js';
 
 // Load .env files
 dotenv.config();
@@ -40,14 +40,14 @@ const createEventParamsSchema = z.object({
 
 // MCP Manifest schema
 const mcpManifest = {
-    schemaVersion: '1.0',
+    schemaVersion: '2024-11-05',
     name: 'calendar-copilot',
     description: 'Google Calendar tools for event management',
     contact: {
         name: 'Calendar Copilot'
     },
     auth: {
-        type: 'none' // Since the server handles authentication internally
+        type: 'none'
     },
     tools: [
         {
@@ -100,7 +100,38 @@ const mcpManifest = {
 };
 
 // MCP Protocol handlers
-// 1. Get manifest
+// 1. Initialize handler
+const initializeHandler: RequestHandler = (req, res) => {
+    const { jsonrpc, id, method, params } = req.body;
+
+    if (method !== 'initialize') {
+        return res.status(400).json({
+            jsonrpc,
+            id,
+            error: {
+                code: -32601,
+                message: 'Method not found'
+            }
+        });
+    }
+
+    res.json({
+        jsonrpc,
+        id,
+        result: {
+            protocolVersion: "2024-11-05",
+            capabilities: {
+                tools: mcpManifest.tools.map(tool => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: tool.inputSchema
+                }))
+            }
+        }
+    });
+};
+
+// 2. Get manifest
 const getManifestHandler: RequestHandler = (req, res) => {
     res.json(mcpManifest);
 };
@@ -125,7 +156,6 @@ const getEventsRangeHandler = async (input: any) => {
             events
         };
     } catch (error: any) {
-        console.error('[MCP:get-events-range] Error:', error);
         throw new Error(`Failed to get events: ${error.message}`);
     }
 };
@@ -145,7 +175,6 @@ const createEventHandler = async (input: any) => {
             event
         };
     } catch (error: any) {
-        console.error('[MCP:create-event] Error:', error);
         throw new Error(`Failed to create event: ${error.message}`);
     }
 };
@@ -160,8 +189,6 @@ const executeToolHandler: RequestHandler = async (req, res) => {
                 error: 'Invalid request: tool name is required'
             });
         }
-
-        console.log(`[MCP] Executing tool: ${mcpRequest.name}`);
 
         let result;
 
@@ -185,7 +212,6 @@ const executeToolHandler: RequestHandler = async (req, res) => {
         return res.json(result);
 
     } catch (error: any) {
-        console.error('[MCP:execute] Error:', error);
         return res.status(500).json({
             error: error.message || 'Internal server error'
         });
@@ -212,6 +238,7 @@ const testHandler: RequestHandler = (req, res) => {
 };
 
 // Register MCP Protocol routes
+router.post('/initialize', initializeHandler);
 router.get('/manifest', getManifestHandler);
 router.post('/execute', executeToolHandler);
 router.get('/tools', listToolsHandler);
@@ -228,7 +255,6 @@ app.use((req, res) => {
 
 // Add global error handler middleware
 app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
-    console.error('[Global Error] Caught:', err);
     const statusCode = err.status || 500;
     res.status(statusCode).json({
         success: false,
@@ -239,17 +265,5 @@ app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
 // Start server
 const PORT = process.env.PORT || 3100;
 app.listen(PORT, () => {
-    console.log(`🚀 Calendar Copilot MCP Server running on port ${PORT}`);
-    console.log(`📄 MCP Manifest available at http://localhost:${PORT}/api/manifest`);
-    console.log(`🔧 MCP Tools available at http://localhost:${PORT}/api/tools`);
-
-    console.log('\n🧩 Exposed MCP Tools:');
-    mcpManifest.tools.forEach(tool => {
-        console.log(`- ${tool.name}: ${tool.description}`);
-    });
-
-    // Log environment configuration
-    console.log('\n⚙️ Environment:');
-    console.log(`- MOCK_MODE: ${process.env.MOCK_MODE === 'true' ? 'Enabled' : 'Disabled'}`);
-    console.log(`- Service Account: ${!!process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL ? 'Configured' : 'Not configured'}`);
+    // Server is running, no need for console logs
 }); 

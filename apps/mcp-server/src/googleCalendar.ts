@@ -49,37 +49,27 @@ const parseDate = (dateStr: string): Date => {
  * @param calendarId Google Calendar ID (defaults to 'primary')
  * @returns Promise<Array<CalendarEvent>>
  */
-export const executeGetEventsRange = async (startDateStr: string, endDateStr: string, calendarId: string = 'primary') => {
+export async function executeGetEventsRange(startDate: string, endDate: string, calendarId: string = 'primary') {
     try {
         const auth = createServiceAuthClient();
         const calendar = google.calendar({ version: 'v3', auth });
 
-        const startDate = parseDate(startDateStr);
-        const endDate = parseDate(endDateStr);
-
-        const timeMin = startOfDay(startDate).toISOString();
-        const timeMax = endOfDay(endDate).toISOString();
-
-        console.log(`[GoogleCalendar] Fetching events from calendar: ${calendarId} between ${timeMin} and ${timeMax}`);
+        const timeMin = new Date(startDate).toISOString();
+        const timeMax = new Date(endDate).toISOString();
 
         const response = await calendar.events.list({
-            calendarId: calendarId,
+            calendarId,
             timeMin,
             timeMax,
             singleEvents: true,
             orderBy: 'startTime',
-            maxResults: 100, // Limit results
         });
 
-        console.log(`[GoogleCalendar] Successfully fetched ${response.data.items?.length || 0} events`);
         return response.data.items || [];
-
     } catch (error: any) {
-        console.error('[GoogleCalendar] Error fetching events:', error);
-        // Re-throw a more specific error or handle it
-        throw new Error(`Failed to fetch Google Calendar events: ${error.message}`);
+        throw error;
     }
-};
+}
 
 /**
  * Executes the logic to create a new event using Service Account.
@@ -90,53 +80,34 @@ export const executeGetEventsRange = async (startDateStr: string, endDateStr: st
  * @param calendarId Google Calendar ID (defaults to 'primary')
  * @returns Promise<CalendarEvent>
  */
-export const executeCreateEvent = async (
-    title: string,
-    datetimeStr: string,
-    durationMinutes: number,
-    attendees: string[] = [],
-    calendarId: string = 'primary'
-) => {
+export async function executeCreateEvent(title: string, datetime: string, duration: number, attendees: string[] = [], calendarId: string = 'primary') {
     try {
         const auth = createServiceAuthClient();
         const calendar = google.calendar({ version: 'v3', auth });
 
-        let startTime: Date;
-        try {
-            startTime = parseDate(datetimeStr);
-        } catch (error: any) {
-            throw new Error(`Invalid datetime format: ${datetimeStr}. ${error.message}`);
-        }
-
-        const endTime = addMinutes(startTime, durationMinutes);
-        const formattedAttendees = attendees.map(email => ({ email }));
+        const startTime = new Date(datetime);
+        const endTime = new Date(startTime.getTime() + duration * 60000);
 
         const event = {
             summary: title,
             start: {
                 dateTime: startTime.toISOString(),
-                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone, // Use system timezone
+                timeZone: 'UTC',
             },
             end: {
                 dateTime: endTime.toISOString(),
-                timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                timeZone: 'UTC',
             },
-            attendees: formattedAttendees,
+            attendees: attendees.map(email => ({ email })),
         };
 
-        console.log(`[GoogleCalendar] Creating event "${title}" in calendar: ${calendarId}`);
-
         const response = await calendar.events.insert({
-            calendarId: calendarId,
+            calendarId,
             requestBody: event,
-            sendUpdates: attendees.length > 0 ? 'all' : 'none',
         });
 
-        console.log(`[GoogleCalendar] Event created successfully: ${response.data.htmlLink}`);
-        return response.data; // Return the created event object
-
+        return response.data;
     } catch (error: any) {
-        console.error('[GoogleCalendar] Error creating event:', error);
-        throw new Error(`Failed to create Google Calendar event: ${error.message}`);
+        throw error;
     }
-}; 
+} 
