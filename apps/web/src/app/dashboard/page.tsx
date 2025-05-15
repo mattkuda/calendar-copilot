@@ -307,13 +307,12 @@ export default function DashboardPage() {
                 <h1 className="text-2xl font-bold">Dashboard</h1>
                 <UserButton afterSignOutUrl="/" />
             </div>
-
-            <div className="mb-6 p-4 bg-card rounded-lg border shadow-sm">
+            {/* <div className="mb-6 p-4 bg-card rounded-lg border shadow-sm">
                 <h2 className="text-lg font-semibold mb-2">Welcome, {user?.firstName || 'User'}</h2>
                 <p className="text-muted-foreground text-sm">
                     Your Google Calendar is connected. Use Calendar Copilot to interact with your calendar.
                 </p>
-            </div>
+            </div> */}
             {/* Google Calendar Integration Section */}
             <div className="p-4 bg-card border rounded-md mb-8">
                 <div className="space-y-3 mb-4">
