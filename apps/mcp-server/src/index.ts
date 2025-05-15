@@ -4,7 +4,7 @@ import express, { Request, Response, Router, RequestHandler } from 'express';
 import path from 'path';
 import cors from 'cors';
 import { z } from 'zod';
-import { executeGetEventsRange, executeCreateEvent } from './googleCalendar.js';
+import { executeGetEventsRange, executeCreateEvent } from './googleCalendar';
 
 // Load .env files
 dotenv.config();
@@ -25,14 +25,14 @@ const router = Router();
 
 // Tool schemas - following the MCP protocol specifications
 const getEventsRangeParamsSchema = z.object({
-    startDate: z.string().describe('Start date in ISO format (YYYY-MM-DD) or natural language (e.g., "today", "tomorrow")'),
-    endDate: z.string().describe('End date in ISO format (YYYY-MM-DD) or natural language (e.g., "today", "tomorrow")'),
+    startDate: z.string().describe('Start date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)'),
+    endDate: z.string().describe('End date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)'),
     calendarId: z.string().optional().describe('Google Calendar ID, defaults to primary calendar')
 });
 
 const createEventParamsSchema = z.object({
     title: z.string().describe('Title of the event'),
-    datetime: z.string().describe('Start date and time of the event in ISO format or natural language'),
+    datetime: z.string().describe('Start date and time of the event in ISO format (YYYY-MM-DDTHH:MM:SS) or natural language'),
     duration: z.number().describe('Duration of the event in minutes'),
     attendees: z.array(z.string()).optional().describe('List of email addresses of attendees'),
     calendarId: z.string().optional().describe('Google Calendar ID, defaults to primary calendar')
@@ -52,13 +52,13 @@ const mcpManifest = {
     tools: [
         {
             name: 'get-events-range',
-            description: 'Retrieves calendar events within a specified date range',
+            description: 'Retrieves calendar events within a specified date range. Must be in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS). Note that if requesting events for a specific date, the end date should be the next day.',
             inputSchema: getEventsRangeParamsSchema,
             examples: [
                 {
                     input: {
-                        startDate: 'today',
-                        endDate: 'tomorrow'
+                        startDate: '2023-04-25T10:00:00Z',
+                        endDate: '2023-04-26T10:00:00Z'
                     },
                     output: {
                         events: [
@@ -265,5 +265,5 @@ app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
 // Start server
 const PORT = process.env.PORT || 3100;
 app.listen(PORT, () => {
-    // Server is running, no need for console logs
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
 }); 
