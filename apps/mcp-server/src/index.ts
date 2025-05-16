@@ -32,7 +32,7 @@ const getEventsRangeParamsSchema = z.object({
 
 const createEventParamsSchema = z.object({
     title: z.string().describe('Title of the event'),
-    datetime: z.string().describe('Start date and time of the event in ISO format (YYYY-MM-DDTHH:MM:SS) or natural language'),
+    datetime: z.string().describe('Start date and time of the event in ISO format (YYYY-MM-DDTHH:MM:SS)'),
     duration: z.number().describe('Duration of the event in minutes'),
     attendees: z.array(z.string()).optional().describe('List of email addresses of attendees'),
     calendarId: z.string().optional().describe('Google Calendar ID, defaults to primary calendar')

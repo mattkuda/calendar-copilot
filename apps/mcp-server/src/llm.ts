@@ -24,8 +24,8 @@ const openai = new OpenAI({
 const GetCalendarEventsSchema = z.object({
     intent: z.literal('get_events'),
     timeRange: z.object({
-        startDate: z.string().describe("Start date in ISO format (YYYY-MM-DD) or natural language (today, tomorrow, etc.). Must be a full date."),
-        endDate: z.string().describe("End date in ISO format (YYYY-MM-DD) or natural language. Must be a full date.")
+        startDate: z.string().describe("Start date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)"),
+        endDate: z.string().describe("End date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)")
     }),
     description: z.string().describe("A description of what the user is asking for")
 });

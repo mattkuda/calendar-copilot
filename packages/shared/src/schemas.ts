@@ -28,8 +28,8 @@ export const CalendarEventSchema = z.object({
 
 // MCP tool schemas
 export const GetEventsRangeParamsSchema = z.object({
-    startDate: z.string().describe('Start date in ISO format (YYYY-MM-DD) or natural language (e.g., "today", "tomorrow")'),
-    endDate: z.string().describe('End date in ISO format (YYYY-MM-DD) or natural language (e.g., "today", "tomorrow")')
+    startDate: z.string().describe('Start date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)'),
+    endDate: z.string().describe('End date in ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)')
 });
 
 export const GetEventsRangeResponseSchema = z.object({
@@ -39,7 +39,7 @@ export const GetEventsRangeResponseSchema = z.object({
 
 export const CreateEventParamsSchema = z.object({
     title: z.string().describe('Title of the event'),
-    datetime: z.string().describe('Start date and time of the event in ISO format or natural language'),
+    datetime: z.string().describe('Start date and time of the event in ISO format (YYYY-MM-DDTHH:MM:SS)'),
     duration: z.number().describe('Duration of the event in minutes'),
     attendees: z.array(z.string().email()).optional().describe('List of email addresses of attendees')
 });
